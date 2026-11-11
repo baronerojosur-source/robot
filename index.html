@@ -53,6 +53,7 @@ canvas{display:block;width:100%;height:100%;user-select:none;-webkit-user-select
   transition:opacity .6s ease;pointer-events:none;
 }
 .caption.gone{opacity:0}
+.caption{display:none}
 .panel{
   position:fixed;z-index:10;left:50%;bottom:0;
   width:min(640px, calc(100% - 16px));
@@ -89,7 +90,7 @@ canvas{display:block;width:100%;height:100%;user-select:none;-webkit-user-select
 <div class="caption" id="caption">Tocca una volta per parlare, due volte per il menu</div>
 
 <div class="panel" id="panel" role="dialog" aria-label="Impostazioni del robot">
-  <h2>Collegamento a Claude (versione 3)</h2>
+  <h2>Collegamento a Claude (versione 4)</h2>
   <p class="note" id="lastLog">Ultimo messaggio: nessuno</p>
   <label class="field">Chiave API
     <input id="apiKey" type="password" autocomplete="off" placeholder="sk-ant-…">
@@ -238,6 +239,42 @@ window.addEventListener("error", function(e){
     ctx.restore();
   }
 
+  // ---------- Sottotitoli disegnati sul viso ----------
+  var cap = {text:"", until:0, alpha:0};
+  function wrapLines(text, maxW){
+    var words = text.split(/\s+/), lines = [], line = "";
+    for (var i = 0; i < words.length; i++){
+      var test = line ? line + " " + words[i] : words[i];
+      if (ctx.measureText(test).width > maxW && line){ lines.push(line); line = words[i]; }
+      else line = test;
+    }
+    if (line) lines.push(line);
+    return lines;
+  }
+  function drawCaption(now, dt){
+    var target = (cap.text && now < cap.until) ? 1 : 0;
+    cap.alpha += (target - cap.alpha) * (1 - Math.exp(-dt * 8));
+    if (cap.alpha < 0.02 || !cap.text) return;
+    var fs = Math.max(16, Math.min(24, W * 0.035));
+    ctx.font = fs + "px 'Trebuchet MS', sans-serif";
+    var maxW = Math.min(W * 0.88, 860);
+    var lines = wrapLines(cap.text, maxW - 28);
+    if (lines.length > 4){ lines = lines.slice(0, 4); lines[3] = lines[3].replace(/\s*\S*$/, "") + "…"; }
+    var lh = fs * 1.3, bw = 0;
+    for (var i = 0; i < lines.length; i++) bw = Math.max(bw, ctx.measureText(lines[i]).width);
+    bw += 28;
+    var bh = lines.length * lh + 16;
+    var bx = (W - bw) / 2, by = 12;
+    ctx.save();
+    ctx.globalAlpha = cap.alpha;
+    ctx.fillStyle = "#1d2a28";
+    roundRect(bx, by, bw, bh, 12); ctx.fill();
+    ctx.lineWidth = 2; ctx.strokeStyle = color; ctx.stroke();
+    ctx.fillStyle = "#ffffff"; ctx.textAlign = "center"; ctx.textBaseline = "top";
+    for (var j = 0; j < lines.length; j++) ctx.fillText(lines[j], W / 2, by + 8 + j * lh + (lh - fs) / 2);
+    ctx.restore();
+  }
+
   var last = performance.now();
   function frame(now){
     var dt = Math.min(0.05, (now - last) / 1000);
@@ -290,6 +327,7 @@ window.addEventListener("error", function(e){
     ctx.fillStyle = "#000"; ctx.fillRect(0, 0, W, H);
     drawEye(0, cur[0], blinkAmt, breath);
     drawEye(1, cur[1], blinkAmt, breath);
+    drawCaption(now, dt);
     requestAnimationFrame(frame);
   }
   blink.next = performance.now() + 1200;
@@ -302,10 +340,8 @@ window.addEventListener("error", function(e){
   function caption(text, ms){
     var d = new Date();
     logEl.textContent = "Ultimo messaggio (" + d.toLocaleTimeString("it-IT") + "): " + text;
-    clearTimeout(capTimer);
-    capEl.textContent = text;
-    capEl.classList.remove("gone");
-    if (ms !== 0) capTimer = setTimeout(function(){ capEl.classList.add("gone"); }, ms || 5000);
+    cap.text = text;
+    cap.until = (ms === 0) ? Infinity : performance.now() + (ms || 5000);
   }
   caption("Tocca una volta per parlare, due volte per il menu", 6000);
 

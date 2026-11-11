@@ -90,7 +90,7 @@ canvas{display:block;width:100%;height:100%;user-select:none;-webkit-user-select
 <div class="caption" id="caption">Tocca una volta per parlare, due volte per il menu</div>
 
 <div class="panel" id="panel" role="dialog" aria-label="Impostazioni del robot">
-  <h2>Collegamento a Claude (versione 4)</h2>
+  <h2>Collegamento a Claude (versione 5)</h2>
   <p class="note" id="lastLog">Ultimo messaggio: nessuno</p>
   <label class="field">Chiave API
     <input id="apiKey" type="password" autocomplete="off" placeholder="sk-ant-…">
@@ -105,6 +105,17 @@ canvas{display:block;width:100%;height:100%;user-select:none;-webkit-user-select
       <option value="claude-sonnet-5-5">Sonnet 5.5: più bravo, costa di più</option>
     </select>
   </label>
+  <label class="field">Vista
+    <select id="vision">
+      <option value="richiesta">Guarda solo quando glielo chiedi</option>
+      <option value="sempre">Guarda a ogni domanda</option>
+      <option value="spenta">Fotocamera spenta</option>
+    </select>
+  </label>
+  <p class="note">Esempi: “cosa vedi?”, “come sto?”, “leggi questo”, “di che colore è?”. Le foto non vengono salvate.</p>
+  <div class="row">
+    <button class="chip" id="lookBtn" type="button">Prova la vista</button>
+  </div>
   <div class="row">
     <input id="typed" type="text" autocomplete="off" placeholder="Scrivi qui per provare senza voce">
     <button class="chip" id="sendBtn" type="button">Invia</button>
@@ -356,6 +367,29 @@ window.addEventListener("error", function(e){
   keyEl.addEventListener("input", function(){ save("robot-api-key", keyEl.value.trim()); });
   nameEl.addEventListener("input", function(){ save("robot-name", nameEl.value.trim()); });
   modelEl.addEventListener("change", function(){ save("robot-model", modelEl.value); });
+  var visionEl = document.getElementById("vision");
+  visionEl.value = load("robot-vision", "richiesta");
+  visionEl.addEventListener("change", function(){ save("robot-vision", visionEl.value); });
+  var VISION_RE = /(vedi|vedere|guarda|guardami|come sto|cosa ho|cosa tengo|cos.?è quest|che cos.?è|leggi|leggere|che colore|chi sono|ti mostro|ti faccio vedere|indovina)/i;
+
+  function takePhoto(){
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return Promise.reject(new Error("fotocamera non disponibile su questo browser"));
+    return navigator.mediaDevices.getUserMedia({video:{facingMode:"user", width:{ideal:1280}, height:{ideal:720}}, audio:false}).then(function(stream){
+      var stop = function(){ stream.getTracks().forEach(function(t){ t.stop(); }); };
+      var v = document.createElement("video");
+      v.muted = true; v.playsInline = true; v.setAttribute("playsinline", ""); v.srcObject = stream;
+      return v.play().then(function(){
+        return new Promise(function(res){ setTimeout(res, 700); });
+      }).then(function(){
+        var vw = v.videoWidth || 1280, vh = v.videoHeight || 720;
+        var w = 768, h = Math.round(w * vh / vw);
+        var c = document.createElement("canvas"); c.width = w; c.height = h;
+        c.getContext("2d").drawImage(v, 0, 0, w, h);
+        stop();
+        return c.toDataURL("image/jpeg", 0.8).split(",")[1];
+      }, function(e){ stop(); throw e; });
+    });
+  }
 
   function systemPrompt(){
     var name = nameEl.value.trim() || "Robot";
@@ -365,7 +399,10 @@ window.addEventListener("error", function(e){
       "rispondi in una, due o al massimo tre frasi brevi, senza elenchi, markdown, emoji o simboli. " +
       "Inizia sempre la risposta con un’etichetta di umore tra parentesi quadre, scelta tra: " +
       "[neutro], [felice], [triste], [arrabbiato], [sorpreso], [assonnato], [dubbioso]. " +
-      "Esempio: [felice] Ciao! Che bello sentirti.";
+      "Esempio: [felice] Ciao! Che bello sentirti. " +
+      "A volte riceverai una foto: è quello che vedi in questo momento con la tua fotocamera, sopra gli occhi. " +
+      "Parlane in prima persona e con naturalezza, come se stessi guardando, senza dire che è una foto. " +
+      "Se non ricevi una foto non puoi vedere nulla: se te lo chiedono, dillo con simpatia.";
   }
 
   function apiError(status, data){
@@ -376,7 +413,7 @@ window.addEventListener("error", function(e){
     return "Errore " + status + (msg ? ": " + msg : "");
   }
 
-  function ask(text){
+  function ask(text, forceVision){
     var key = keyEl.value.trim();
     if (!key){ caption("Inserisci la chiave API nel menu (doppio tocco).", 6000); window.robot.react("dubbioso", 2500); setState("idle"); return; }
     setState("thinking");
@@ -384,10 +421,31 @@ window.addEventListener("error", function(e){
     history.push({role:"user", content:text});
     while (history.length > 14) history.shift();
     while (history.length && history[0].role !== "user") history.shift();
+    var mode = visionEl.value;
+    var wantPhoto = mode !== "spenta" && (mode === "sempre" || forceVision || VISION_RE.test(text));
+    var pre = Promise.resolve(null);
+    if (wantPhoto){
+      caption("Ti guardo…", 0);
+      window.robot.lookAt(0, 0, 2500);
+      pre = takePhoto().catch(function(e){
+        caption("Non riesco a usare la fotocamera: " + (e && e.message ? e.message : e), 6000);
+        return null;
+      });
+    }
 
     var ctrl = ("AbortController" in window) ? new AbortController() : null;
-    var timeout = setTimeout(function(){ if (ctrl) ctrl.abort(); }, 25000);
-    fetch("https://api.anthropic.com/v1/messages", {
+    var timeout = setTimeout(function(){ if (ctrl) ctrl.abort(); }, 35000);
+    pre.then(function(img){
+    var msgs = history.slice();
+    if (img){
+      msgs[msgs.length-1] = {role:"user", content:[
+        {type:"image", source:{type:"base64", media_type:"image/jpeg", data:img}},
+        {type:"text", text:text}
+      ]};
+      history[history.length-1] = {role:"user", content: text + " (in quel momento ti ho mostrato una foto)"};
+      caption("Tu: " + text + " (invio a Claude con la foto…)", 0);
+    }
+    return fetch("https://api.anthropic.com/v1/messages", {
       method:"POST",
       signal: ctrl ? ctrl.signal : undefined,
       headers:{
@@ -400,9 +458,9 @@ window.addEventListener("error", function(e){
         model: modelEl.value,
         max_tokens: 300,
         system: systemPrompt(),
-        messages: history
+        messages: msgs
       })
-    }).then(function(r){
+    }); }).then(function(r){
       clearTimeout(timeout);
       return r.json().catch(function(){ return null; }).then(function(d){ return {ok:r.ok, status:r.status, data:d}; });
     }).then(function(res){
@@ -417,7 +475,7 @@ window.addEventListener("error", function(e){
       speak(txt, (md && MOODS[md] && !MOODS[md].hidden) ? md : "neutro");
     }).catch(function(err){
       clearTimeout(timeout);
-      if (err && err.name === "AbortError") err = new Error("Claude non ha risposto entro 25 secondi: controlla la connessione.");
+      if (err && err.name === "AbortError") err = new Error("Claude non ha risposto entro 35 secondi: controlla la connessione.");
       if (history.length && history[history.length-1].role === "user") history.pop();
       setState("idle");
       var msg = err && err.message ? err.message : "Errore sconosciuto";
@@ -567,6 +625,11 @@ window.addEventListener("error", function(e){
     ask(t);
   }
   document.getElementById("sendBtn").addEventListener("click", sendTyped);
+  document.getElementById("lookBtn").addEventListener("click", function(){
+    if (state !== "idle") return;
+    primeSpeech(); closePanel();
+    ask("Cosa vedi in questo momento?", true);
+  });
   typedEl.addEventListener("keydown", function(e){ if (e.key === "Enter") sendTyped(); });
 
   // ================= Schermo intero e schermo acceso =================

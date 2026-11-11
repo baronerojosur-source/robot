@@ -90,7 +90,7 @@ canvas{display:block;width:100%;height:100%;user-select:none;-webkit-user-select
 <div class="caption" id="caption">Tocca una volta per parlare, due volte per il menu</div>
 
 <div class="panel" id="panel" role="dialog" aria-label="Impostazioni del robot">
-  <h2>Collegamento a Claude (versione 6)</h2>
+  <h2>Collegamento a Claude (versione 6.2)</h2>
   <p class="note" id="lastLog">Ultimo messaggio: nessuno</p>
   <label class="field">Chiave API
     <input id="apiKey" type="password" autocomplete="off" placeholder="sk-ant-…">
@@ -569,7 +569,11 @@ window.addEventListener("error", function(e){
     rec.lang = "it-IT"; rec.interimResults = false; rec.maxAlternatives = 1;
     rec.onresult = function(e){ got = true; ask(e.results[0][0].transcript); };
     rec.onerror = function(e){ if (state === "listening") setState("idle"); caption(micError(e.error), 6000); };
-    rec.onend = function(){ if (!got && state === "listening") setState("idle"); };
+    var guard = setTimeout(function(){ if (state === "listening") stopListening(); }, 12000);
+    rec.onend = function(){
+      clearTimeout(guard);
+      if (!got && state === "listening"){ setState("idle"); caption("Non ho sentito nulla. Tocca e riprova.", 3000); }
+    };
     setState("listening");
     caption("Ti ascolto…", 0);
     try { rec.start(); } catch(e){ setState("idle"); caption("Il microfono non è partito: riprova.", 5000); }
@@ -687,11 +691,15 @@ window.addEventListener("error", function(e){
     txt = txt.replace(/\[[a-zàèéìòù]+\]/gi, "").replace(/[*_#`]/g, "").trim();
     return { text: txt, mood: (md && MOODS[md] && !MOODS[md].hidden) ? md : "neutro" };
   }
-  function describe(b64, instruction){
+  function describe(b64, instruction, retried){
     return claudeRaw([{role:"user", content:[
       {type:"image", source:{type:"base64", media_type:"image/jpeg", data:b64}},
       {type:"text", text:instruction}
-    ]}], 220).then(function(t){ return splitMood(t).text; });
+    ]}], 300).then(function(t){
+      var out = splitMood(t).text;
+      if (!out && !retried) return describe(b64, "Descrivi in una o due frasi brevi cosa vedi in questa immagine.", true);
+      return out || "(descrizione non disponibile)";
+    });
   }
   function hhmm(){ var d = new Date(); return d.toLocaleTimeString("it-IT", {hour:"2-digit", minute:"2-digit"}); }
 
@@ -767,7 +775,7 @@ window.addEventListener("error", function(e){
     sentinel.lastAlert = now; sentinel.alerts.push(now); sentinel.lastEvent = now;
     var when = hhmm();
     grabFrame().then(function(b64){
-      return describe(b64, "Sei in modalità sentinella: qualcosa si è mosso davanti a te. Descrivi in una o due frasi brevi cosa vedi, citando persone, animali o oggetti. Se non vedi niente di particolare, dillo.")
+      return describe(b64, "Il tuo proprietario ti ha chiesto di tenere d’occhio la stanza mentre è via, e qualcosa si è appena mosso davanti a te. Descrivi in una o due frasi brevi cosa vedi: persone, animali o oggetti. Se non vedi niente di particolare, dillo.")
         .catch(function(){ return "(descrizione non disponibile)"; })
         .then(function(desc){
           if (!tg.owner) return;

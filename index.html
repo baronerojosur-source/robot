@@ -90,7 +90,7 @@ canvas{display:block;width:100%;height:100%;user-select:none;-webkit-user-select
 <div class="caption" id="caption">Tocca una volta per parlare, due volte per il menu</div>
 
 <div class="panel" id="panel" role="dialog" aria-label="Impostazioni del robot">
-  <h2>Collegamento a Claude (versione 6.2)</h2>
+  <h2>Collegamento a Claude (versione 6.3)</h2>
   <p class="note" id="lastLog">Ultimo messaggio: nessuno</p>
   <label class="field">Chiave API
     <input id="apiKey" type="password" autocomplete="off" placeholder="sk-ant-…">
@@ -924,11 +924,19 @@ window.addEventListener("error", function(e){
   if (load("robot-sentinel", "0") === "1") setTimeout(function(){ startSentinel().catch(function(){}); }, 1500);
 
   // ================= Schermo intero e schermo acceso =================
+  var wakeLock = null;
   function keepAwake(){
     if (!("wakeLock" in navigator) || document.visibilityState !== "visible") return;
-    navigator.wakeLock.request("screen").catch(function(){});
+    if (wakeLock && !wakeLock.released) return;
+    navigator.wakeLock.request("screen").then(function(l){
+      wakeLock = l;
+      l.addEventListener("release", function(){ wakeLock = null; setTimeout(keepAwake, 1000); });
+    }).catch(function(){});
   }
   document.addEventListener("visibilitychange", keepAwake);
+  document.addEventListener("pointerdown", keepAwake);
+  setInterval(keepAwake, 60000);
+  keepAwake();
   document.getElementById("fsBtn").addEventListener("click", function(){
     var el = document.documentElement;
     var req = el.requestFullscreen || el.webkitRequestFullscreen;

@@ -1,0 +1,559 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#000000">
+<title>Robot</title>
+<style>
+:root{
+  --face:#000000;
+  --panel:#eef4f3;
+  --panel-ink:#0f2421;
+  --panel-muted:#55706b;
+  --chip:#ffffff;
+  --chip-ink:#0f2421;
+  --chip-line:#cbdad7;
+  --chip-on:#0f2421;
+  --chip-on-ink:#ffffff;
+  --caption:rgba(255,255,255,.82);
+  color-scheme:light;
+  box-sizing:border-box;
+  padding-top:env(safe-area-inset-top,0px);
+  padding-bottom:env(safe-area-inset-bottom,0px);
+  background:var(--face);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --panel:#131d1c; --panel-ink:#e6f2f0; --panel-muted:#93aba6;
+    --chip:#1d2a28; --chip-ink:#e6f2f0; --chip-line:#2d3f3c;
+    --chip-on:#e6f2f0; --chip-on-ink:#0f2421;
+    color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --panel:#131d1c; --panel-ink:#e6f2f0; --panel-muted:#93aba6;
+  --chip:#1d2a28; --chip-ink:#e6f2f0; --chip-line:#2d3f3c;
+  --chip-on:#e6f2f0; --chip-on-ink:#0f2421;
+  color-scheme:dark;
+}
+*,*::before,*::after{box-sizing:inherit}
+html{height:100%;scroll-padding-top:env(safe-area-inset-top,0px)}
+body{
+  margin:0;height:100%;overflow:hidden;background:var(--face);
+  font-family:"Trebuchet MS",system-ui,sans-serif;
+  -webkit-tap-highlight-color:transparent;touch-action:manipulation;
+}
+canvas{display:block;width:100%;height:100%;user-select:none;-webkit-user-select:none}
+.caption{
+  position:fixed;left:50%;top:calc(12px + env(safe-area-inset-top,0px));
+  transform:translateX(-50%);width:min(92%, 900px);z-index:5;
+  text-align:center;color:#ffffff;font-size:20px;line-height:1.35;
+  background:#1d2a28;border:2px solid #3ff0dc;border-radius:14px;padding:8px 14px;
+  transition:opacity .6s ease;pointer-events:none;
+}
+.caption.gone{opacity:0}
+.panel{
+  position:fixed;z-index:10;left:50%;bottom:0;
+  width:min(640px, calc(100% - 16px));
+  max-height:calc(100% - 16px);overflow-y:auto;
+  transform:translate(-50%,105%);
+  transition:transform .28s cubic-bezier(.2,.8,.2,1);
+  background:var(--panel);color:var(--panel-ink);
+  border-radius:20px 20px 0 0;
+  padding:12px 16px calc(14px + env(safe-area-inset-bottom,0px));
+}
+.panel.open{transform:translate(-50%,0)}
+.panel h2{margin:6px 0 6px;font-size:15px;font-weight:700;color:var(--panel-muted)}
+.row{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px;align-items:center}
+.chip{
+  font:inherit;font-size:16px;min-height:44px;padding:6px 14px;border-radius:22px;
+  background:var(--chip);color:var(--chip-ink);border:1.5px solid var(--chip-line);cursor:pointer;
+}
+.chip[aria-pressed="true"]{background:var(--chip-on);color:var(--chip-on-ink);border-color:var(--chip-on)}
+.swatch{width:44px;height:44px;border-radius:50%;cursor:pointer;border:3px solid var(--chip-line)}
+.swatch[aria-pressed="true"]{border-color:var(--panel-ink)}
+.field{display:flex;flex-direction:column;gap:4px;margin-bottom:10px;font-size:15px}
+.field input,.field select,.row input{
+  font:inherit;font-size:16px;min-height:44px;padding:6px 12px;border-radius:12px;
+  border:1.5px solid var(--chip-line);background:var(--chip);color:var(--chip-ink);
+}
+.row input{flex:1 1 200px}
+.note{font-size:14px;color:var(--panel-muted);margin:-4px 0 10px}
+.chip:focus-visible,.swatch:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid #3ff0dc;outline-offset:2px}
+@media (prefers-reduced-motion: reduce){.panel{transition:none}}
+</style>
+</head>
+<body>
+<canvas id="face" aria-label="Viso del robot"></canvas>
+<div class="caption" id="caption">Tocca una volta per parlare, due volte per il menu</div>
+
+<div class="panel" id="panel" role="dialog" aria-label="Impostazioni del robot">
+  <h2>Collegamento a Claude (versione 3)</h2>
+  <p class="note" id="lastLog">Ultimo messaggio: nessuno</p>
+  <label class="field">Chiave API
+    <input id="apiKey" type="password" autocomplete="off" placeholder="sk-ant-…">
+  </label>
+  <p class="note">La chiave resta salvata solo su questo telefono.</p>
+  <label class="field">Nome del robot
+    <input id="robotName" type="text" autocomplete="off" placeholder="Robot">
+  </label>
+  <label class="field">Modello
+    <select id="model">
+      <option value="claude-haiku-5-5">Haiku 5.5: veloce ed economico</option>
+      <option value="claude-sonnet-5-5">Sonnet 5.5: più bravo, costa di più</option>
+    </select>
+  </label>
+  <div class="row">
+    <input id="typed" type="text" autocomplete="off" placeholder="Scrivi qui per provare senza voce">
+    <button class="chip" id="sendBtn" type="button">Invia</button>
+  </div>
+
+  <h2>Umore</h2>
+  <div class="row" id="moods"></div>
+  <h2>Colore degli occhi</h2>
+  <div class="row" id="colors"></div>
+  <div class="row">
+    <button class="chip" id="fsBtn" type="button">Schermo intero</button>
+    <button class="chip" id="resetBtn" type="button">Nuova conversazione</button>
+    <button class="chip" id="closeBtn" type="button">Chiudi menu</button>
+  </div>
+</div>
+
+<script>
+window.addEventListener("error", function(e){
+  var c = document.getElementById("caption");
+  if (c){ c.textContent = "Errore nella pagina: " + e.message; c.classList.remove("gone"); }
+  var l = document.getElementById("lastLog");
+  if (l) l.textContent = "Errore nella pagina: " + e.message;
+});
+(function(){
+  "use strict";
+  // ================= Viso =================
+  var cv = document.getElementById("face");
+  var ctx = cv.getContext("2d");
+  var W = 0, H = 0, dpr = 1;
+  function resize(){
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    var r = cv.getBoundingClientRect();
+    W = r.width; H = r.height;
+    cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+  window.addEventListener("resize", resize);
+  resize();
+
+  var KEYS = ["lidTop","tilt","lidBot","sw","sh","rad","dy"];
+  function eye(o){
+    var e = {lidTop:0, tilt:0, lidBot:0, sw:1, sh:1, rad:0.32, dy:0};
+    if (o) for (var k in o) e[k] = o[k];
+    return e;
+  }
+  function pair(o){ return [eye(o), eye(o)]; }
+
+  var MOODS = {
+    neutro:     { label:"Neutro",     make:function(){ return pair(); } },
+    felice:     { label:"Felice",     make:function(){ return pair({lidBot:0.5, sh:0.95}); } },
+    triste:     { label:"Triste",     make:function(){ return pair({lidTop:0.32, tilt:-0.9, sh:0.92, dy:0.25}); } },
+    arrabbiato: { label:"Arrabbiato", make:function(){ return pair({lidTop:0.3, tilt:1, sh:0.9}); } },
+    sorpreso:   { label:"Sorpreso",   make:function(){ return pair({sw:1.1, sh:1.15, rad:0.5}); } },
+    assonnato:  { label:"Assonnato",  make:function(){ return pair({lidTop:0.55, lidBot:0.08, dy:0.2}); } },
+    dubbioso:   { label:"Dubbioso",   make:function(){ return [eye({lidTop:0.38, tilt:0.3}), eye({sh:1.08})]; } },
+    // espressioni usate solo dalla conversazione
+    attento:    { hidden:true, make:function(){ return pair({sw:1.05, sh:1.12, rad:0.42}); } },
+    pensa:      { hidden:true, make:function(){ return pair({lidTop:0.18, sh:0.95}); } }
+  };
+  var COLORS = [
+    {name:"Turchese", hex:"#3ff0dc"},
+    {name:"Ambra",    hex:"#ffb547"},
+    {name:"Rosa",     hex:"#ff7fb8"},
+    {name:"Bianco",   hex:"#eef3ff"}
+  ];
+
+  function load(k, d){ try { var v = localStorage.getItem(k); return v === null ? d : v; } catch(e){ return d; } }
+  function save(k, v){ try { localStorage.setItem(k, v); } catch(e){} }
+
+  var mood = "neutro";
+  var tempMood = null, tempUntil = 0;
+  var state = "idle";            // idle | listening | thinking | speaking
+  var speakMood = "neutro";
+  var cur = MOODS.neutro.make();
+  var look = {x:0, y:0}, lookT = {x:0, y:0};
+  var holdLookUntil = 0, nextLookAt = 0;
+  var blink = {active:false, t:0, dur:0.18, next:0, again:false};
+  var talkPulse = 0;
+  var color = load("robot-eye-color", COLORS[0].hex);
+
+  function hexToRgb(h){ h = h.replace("#",""); return [parseInt(h.substr(0,2),16), parseInt(h.substr(2,2),16), parseInt(h.substr(4,2),16)]; }
+  function shade(h, f){ var c = hexToRgb(h); return "rgb(" + Math.round(c[0]*f) + "," + Math.round(c[1]*f) + "," + Math.round(c[2]*f) + ")"; }
+
+  function activeMood(now){
+    if (tempMood && now < tempUntil) return tempMood;
+    tempMood = null;
+    if (state === "listening") return "attento";
+    if (state === "thinking") return "pensa";
+    if (state === "speaking") return speakMood;
+    return mood;
+  }
+
+  function roundRect(x, y, w, h, r){
+    r = Math.max(0, Math.min(r, w/2, h/2));
+    ctx.beginPath();
+    ctx.moveTo(x+r, y); ctx.lineTo(x+w-r, y); ctx.quadraticCurveTo(x+w, y, x+w, y+r);
+    ctx.lineTo(x+w, y+h-r); ctx.quadraticCurveTo(x+w, y+h, x+w-r, y+h);
+    ctx.lineTo(x+r, y+h); ctx.quadraticCurveTo(x, y+h, x, y+h-r);
+    ctx.lineTo(x, y+r); ctx.quadraticCurveTo(x, y, x+r, y);
+    ctx.closePath();
+  }
+
+  function drawEye(i, e, blinkAmt, breath){
+    var base = Math.min(W * 0.2, H * 0.48);
+    var side = (i === 0) ? -1 : 1;
+    var lean = 1 + look.x * 0.07 * side;
+    var w = base * e.sw * lean;
+    var h = base * 1.15 * e.sh * lean * breath * (1 - blinkAmt * 0.92);
+    var cx = W/2 + side * base * 0.85 + look.x * W * 0.09;
+    var cy = H/2 + e.dy * base * 0.4 + look.y * H * 0.12;
+    var top = cy - h/2, bottom = cy + h/2;
+    var pad = base * 0.25;
+    var L = cx - w/2 - pad, R = cx + w/2 + pad;
+    var topShift = pad * Math.max(0, 1 - e.lidTop * 5);
+    var yInner = top + h * (e.lidTop + e.tilt * 0.22) - topShift;
+    var yOuter = top + h * (e.lidTop - e.tilt * 0.22) - topShift;
+    var yL = (i === 0) ? yOuter : yInner;
+    var yR = (i === 0) ? yInner : yOuter;
+    var botEdge = bottom + pad * Math.max(0, 1 - e.lidBot * 5);
+    var ctrlY = bottom + pad - 2.2 * h * e.lidBot;
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(L, yL); ctx.lineTo(R, yR); ctx.lineTo(R, botEdge);
+    ctx.quadraticCurveTo(cx, ctrlY, L, botEdge);
+    ctx.closePath(); ctx.clip();
+    var g = ctx.createLinearGradient(0, top, 0, bottom);
+    g.addColorStop(0, color); g.addColorStop(1, shade(color, 0.72));
+    ctx.fillStyle = g; ctx.shadowColor = color; ctx.shadowBlur = base * 0.18;
+    roundRect(cx - w/2, top, w, h, Math.min(w, h) * e.rad);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  var last = performance.now();
+  function frame(now){
+    var dt = Math.min(0.05, (now - last) / 1000);
+    last = now;
+    var t = now / 1000;
+    var am = activeMood(now);
+    var target = MOODS[am].make();
+    var k = 1 - Math.exp(-dt * 9);
+    for (var i = 0; i < 2; i++) for (var j = 0; j < KEYS.length; j++){
+      var key = KEYS[j];
+      cur[i][key] += (target[i][key] - cur[i][key]) * k;
+    }
+
+    if (state === "thinking"){
+      lookT.x = Math.sin(t * 1.3) * 0.6; lookT.y = -0.55;
+    } else if (state === "listening" || state === "speaking"){
+      if (now > holdLookUntil){ lookT.x = 0; lookT.y = 0; }
+    } else if (now > holdLookUntil && now > nextLookAt){
+      if (Math.random() < 0.4){ lookT.x = 0; lookT.y = 0; }
+      else { lookT.x = Math.random()*2 - 1; lookT.y = Math.random()*1.2 - 0.6; }
+      nextLookAt = now + 1500 + Math.random()*2500;
+    }
+    var kl = 1 - Math.exp(-dt * 12);
+    look.x += (lookT.x - look.x) * kl;
+    look.y += (lookT.y - look.y) * kl;
+
+    var sleepy = am === "assonnato";
+    if (!blink.active && now > blink.next){
+      blink.active = true; blink.t = 0;
+      blink.dur = sleepy ? 0.45 : 0.18;
+      blink.again = !sleepy && Math.random() < 0.18;
+    }
+    var blinkAmt = 0;
+    if (blink.active){
+      blink.t += dt / blink.dur;
+      if (blink.t >= 1){
+        blink.active = false;
+        if (blink.again){ blink.again = false; blink.next = now + 120; }
+        else blink.next = now + (sleepy ? 3500 : 2000) + Math.random()*4000;
+      } else blinkAmt = Math.sin(Math.PI * blink.t);
+    }
+
+    var breath = 1 + Math.sin(t * 1.6) * 0.015;
+    if (state === "speaking"){
+      talkPulse = Math.max(talkPulse - dt * 4, 0);
+      breath *= 1 + Math.abs(Math.sin(t * 9)) * 0.035 + talkPulse * 0.05;
+    }
+    if (state === "listening") breath *= 1 + Math.sin(t * 4) * 0.02;
+
+    ctx.fillStyle = "#000"; ctx.fillRect(0, 0, W, H);
+    drawEye(0, cur[0], blinkAmt, breath);
+    drawEye(1, cur[1], blinkAmt, breath);
+    requestAnimationFrame(frame);
+  }
+  blink.next = performance.now() + 1200;
+  requestAnimationFrame(frame);
+
+  // ================= Didascalie =================
+  var capEl = document.getElementById("caption");
+  var capTimer = null;
+  var logEl = document.getElementById("lastLog");
+  function caption(text, ms){
+    var d = new Date();
+    logEl.textContent = "Ultimo messaggio (" + d.toLocaleTimeString("it-IT") + "): " + text;
+    clearTimeout(capTimer);
+    capEl.textContent = text;
+    capEl.classList.remove("gone");
+    if (ms !== 0) capTimer = setTimeout(function(){ capEl.classList.add("gone"); }, ms || 5000);
+  }
+  caption("Tocca una volta per parlare, due volte per il menu", 6000);
+
+  // ================= Claude =================
+  var history = [];
+  var keyEl = document.getElementById("apiKey");
+  var nameEl = document.getElementById("robotName");
+  var modelEl = document.getElementById("model");
+  keyEl.value = load("robot-api-key", "");
+  nameEl.value = load("robot-name", "");
+  modelEl.value = load("robot-model", "claude-haiku-5-5");
+  keyEl.addEventListener("input", function(){ save("robot-api-key", keyEl.value.trim()); });
+  nameEl.addEventListener("input", function(){ save("robot-name", nameEl.value.trim()); });
+  modelEl.addEventListener("change", function(){ save("robot-model", modelEl.value); });
+
+  function systemPrompt(){
+    var name = nameEl.value.trim() || "Robot";
+    return "Sei " + name + ", un piccolo robot da scrivania. Il tuo viso è lo schermo di un vecchio smartphone Xperia, " +
+      "con due occhi animati; presto avrai anche un collo motorizzato. Parli in italiano con la persona che ti ha costruito, " +
+      "con un carattere curioso, simpatico e un po’ giocoso. Le tue risposte vengono lette ad alta voce da una sintesi vocale: " +
+      "rispondi in una, due o al massimo tre frasi brevi, senza elenchi, markdown, emoji o simboli. " +
+      "Inizia sempre la risposta con un’etichetta di umore tra parentesi quadre, scelta tra: " +
+      "[neutro], [felice], [triste], [arrabbiato], [sorpreso], [assonnato], [dubbioso]. " +
+      "Esempio: [felice] Ciao! Che bello sentirti.";
+  }
+
+  function apiError(status, data){
+    var msg = data && data.error && data.error.message ? data.error.message : "";
+    if (status === 401) return "La chiave API non è valida: controllala nel menu.";
+    if (status === 429) return "Troppe richieste o credito esaurito. " + msg;
+    if (status === 400 && /credit/i.test(msg)) return "Credito API esaurito: ricaricalo nella console Anthropic.";
+    return "Errore " + status + (msg ? ": " + msg : "");
+  }
+
+  function ask(text){
+    var key = keyEl.value.trim();
+    if (!key){ caption("Inserisci la chiave API nel menu (doppio tocco).", 6000); window.robot.react("dubbioso", 2500); setState("idle"); return; }
+    setState("thinking");
+    caption("Tu: " + text + " (invio a Claude…)", 0);
+    history.push({role:"user", content:text});
+    while (history.length > 14) history.shift();
+    while (history.length && history[0].role !== "user") history.shift();
+
+    var ctrl = ("AbortController" in window) ? new AbortController() : null;
+    var timeout = setTimeout(function(){ if (ctrl) ctrl.abort(); }, 25000);
+    fetch("https://api.anthropic.com/v1/messages", {
+      method:"POST",
+      signal: ctrl ? ctrl.signal : undefined,
+      headers:{
+        "content-type":"application/json",
+        "x-api-key":key,
+        "anthropic-version":"2023-06-01",
+        "anthropic-dangerous-direct-browser-access":"true"
+      },
+      body: JSON.stringify({
+        model: modelEl.value,
+        max_tokens: 300,
+        system: systemPrompt(),
+        messages: history
+      })
+    }).then(function(r){
+      clearTimeout(timeout);
+      return r.json().catch(function(){ return null; }).then(function(d){ return {ok:r.ok, status:r.status, data:d}; });
+    }).then(function(res){
+      if (!res.ok) throw new Error(apiError(res.status, res.data));
+      var txt = (res.data.content || []).filter(function(b){ return b.type === "text"; })
+        .map(function(b){ return b.text; }).join(" ").trim();
+      history.push({role:"assistant", content:txt});
+      var m = txt.match(/^\s*\[([a-zàèéìòù]+)\]\s*/i);
+      var md = null;
+      if (m){ md = m[1].toLowerCase(); txt = txt.slice(m[0].length); }
+      txt = txt.replace(/\[[a-zàèéìòù]+\]/gi, "").replace(/[*_#`]/g, "").trim();
+      speak(txt, (md && MOODS[md] && !MOODS[md].hidden) ? md : "neutro");
+    }).catch(function(err){
+      clearTimeout(timeout);
+      if (err && err.name === "AbortError") err = new Error("Claude non ha risposto entro 25 secondi: controlla la connessione.");
+      if (history.length && history[history.length-1].role === "user") history.pop();
+      setState("idle");
+      var msg = err && err.message ? err.message : "Errore sconosciuto";
+      if (/Failed to fetch|NetworkError/i.test(msg)) msg = "Non riesco a raggiungere Claude (" + msg + "). Controlla il Wi-Fi.";
+      caption(msg, 8000);
+      window.robot.react("triste", 2500);
+    });
+  }
+
+  // ================= Voce =================
+  var voices = [];
+  function loadVoices(){ if ("speechSynthesis" in window) voices = speechSynthesis.getVoices(); }
+  loadVoices();
+  if ("speechSynthesis" in window) speechSynthesis.onvoiceschanged = loadVoices;
+  function italianVoice(){
+    for (var i = 0; i < voices.length; i++) if (/^it/i.test(voices[i].lang)) return voices[i];
+    return null;
+  }
+  var primed = false;
+  function primeSpeech(){
+    if (primed || !("speechSynthesis" in window)) return;
+    primed = true;
+    try { var u = new SpeechSynthesisUtterance(" "); u.volume = 0; speechSynthesis.speak(u); } catch(e){}
+  }
+
+  var speakGuard = null;
+  function speak(text, md){
+    speakMood = md || "neutro";
+    setState("speaking");
+    caption(text, 0);
+    var finish = function(){
+      clearTimeout(speakGuard);
+      if (state !== "speaking") return;
+      setState("idle");
+      window.robot.react(speakMood, 2500);
+      caption(text, 4000);
+    };
+    speakGuard = setTimeout(finish, 4000 + text.length * 110);
+    if (!("speechSynthesis" in window)) return;
+    var u = new SpeechSynthesisUtterance(text);
+    u.lang = "it-IT";
+    var v = italianVoice(); if (v) u.voice = v;
+    u.rate = 1.05; u.pitch = 1.15;
+    u.onboundary = function(){ talkPulse = 1; };
+    u.onend = finish; u.onerror = finish;
+    speechSynthesis.cancel();
+    speechSynthesis.speak(u);
+  }
+
+  var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  var rec = null;
+  function micError(code){
+    if (code === "not-allowed" || code === "service-not-allowed") return "Microfono bloccato: consenti l’accesso al microfono per questa pagina.";
+    if (code === "no-speech") return "Non ho sentito nulla. Tocca e riprova.";
+    if (code === "network") return "Il riconoscimento vocale ha bisogno di internet.";
+    if (code === "audio-capture") return "Non trovo il microfono.";
+    return "Errore del microfono: " + code;
+  }
+  function startListening(){
+    if (!keyEl.value.trim()){ caption("Inserisci la chiave API nel menu (doppio tocco).", 6000); window.robot.react("dubbioso", 2500); return; }
+    if (!SR){ caption("Riconoscimento vocale non disponibile: usa il campo di testo nel menu.", 7000); return; }
+    var got = false;
+    rec = new SR();
+    rec.lang = "it-IT"; rec.interimResults = false; rec.maxAlternatives = 1;
+    rec.onresult = function(e){ got = true; ask(e.results[0][0].transcript); };
+    rec.onerror = function(e){ if (state === "listening") setState("idle"); caption(micError(e.error), 6000); };
+    rec.onend = function(){ if (!got && state === "listening") setState("idle"); };
+    setState("listening");
+    caption("Ti ascolto…", 0);
+    try { rec.start(); } catch(e){ setState("idle"); caption("Il microfono non è partito: riprova.", 5000); }
+  }
+  function stopListening(){ try { if (rec) rec.stop(); } catch(e){} }
+
+  function setState(s){ state = s; }
+
+  // ================= API interna (per i servo, più avanti) =================
+  window.robot = {
+    setMood: function(name){ if (MOODS[name] && !MOODS[name].hidden){ mood = name; tempMood = null; syncMoodButtons(); } },
+    react: function(name, ms){ if (MOODS[name]){ tempMood = name; tempUntil = performance.now() + (ms || 1500); } },
+    lookAt: function(x, y, ms){ lookT.x = x; lookT.y = y; holdLookUntil = performance.now() + (ms || 2000); },
+    blink: function(){ blink.next = 0; },
+    say: function(text){ ask(text); },
+    get state(){ return state; }
+  };
+
+  // ================= Tocco =================
+  var panel = document.getElementById("panel");
+  var lastTap = 0, tapTimer = null;
+  cv.addEventListener("pointerdown", function(){
+    primeSpeech();
+    if (panel.classList.contains("open")){ closePanel(); return; }
+    var now = performance.now();
+    if (now - lastTap < 350){ clearTimeout(tapTimer); lastTap = 0; openPanel(); return; }
+    lastTap = now;
+    tapTimer = setTimeout(singleTap, 360);
+  });
+  function singleTap(){
+    if (state === "listening") stopListening();
+    else if (state === "speaking"){ if ("speechSynthesis" in window) speechSynthesis.cancel(); setState("idle"); }
+    else if (state === "idle") startListening();
+  }
+
+  // ================= Menu =================
+  var moodsEl = document.getElementById("moods");
+  var colorsEl = document.getElementById("colors");
+  Object.keys(MOODS).forEach(function(name){
+    if (MOODS[name].hidden) return;
+    var b = document.createElement("button");
+    b.type = "button"; b.className = "chip"; b.textContent = MOODS[name].label; b.dataset.mood = name;
+    b.addEventListener("click", function(){ window.robot.setMood(name); });
+    moodsEl.appendChild(b);
+  });
+  function syncMoodButtons(){
+    var bs = moodsEl.querySelectorAll("button");
+    for (var i = 0; i < bs.length; i++) bs[i].setAttribute("aria-pressed", bs[i].dataset.mood === mood ? "true" : "false");
+  }
+  syncMoodButtons();
+  COLORS.forEach(function(c){
+    var b = document.createElement("button");
+    b.type = "button"; b.className = "swatch"; b.style.background = c.hex;
+    b.setAttribute("aria-label", c.name); b.dataset.hex = c.hex;
+    b.addEventListener("click", function(){ setColor(c.hex); });
+    colorsEl.appendChild(b);
+  });
+  function setColor(hex){
+    color = hex; save("robot-eye-color", hex);
+    var bs = colorsEl.querySelectorAll("button");
+    for (var i = 0; i < bs.length; i++) bs[i].setAttribute("aria-pressed", bs[i].dataset.hex === hex ? "true" : "false");
+  }
+  setColor(color);
+
+  function openPanel(){ panel.classList.add("open"); }
+  function closePanel(){ panel.classList.remove("open"); if (document.activeElement) document.activeElement.blur(); }
+  document.getElementById("closeBtn").addEventListener("click", closePanel);
+  document.getElementById("resetBtn").addEventListener("click", function(){
+    history = []; closePanel(); caption("Conversazione ricominciata.", 3000); window.robot.react("sorpreso", 1200);
+  });
+
+  var typedEl = document.getElementById("typed");
+  function sendTyped(){
+    var t = typedEl.value.trim();
+    if (!t){ caption("Scrivi prima un messaggio nel campo di testo.", 4000); return; }
+    if (state !== "idle"){ if ("speechSynthesis" in window) speechSynthesis.cancel(); setState("idle"); }
+    primeSpeech();
+    typedEl.value = "";
+    closePanel();
+    ask(t);
+  }
+  document.getElementById("sendBtn").addEventListener("click", sendTyped);
+  typedEl.addEventListener("keydown", function(e){ if (e.key === "Enter") sendTyped(); });
+
+  // ================= Schermo intero e schermo acceso =================
+  function keepAwake(){
+    if (!("wakeLock" in navigator) || document.visibilityState !== "visible") return;
+    navigator.wakeLock.request("screen").catch(function(){});
+  }
+  document.addEventListener("visibilitychange", keepAwake);
+  document.getElementById("fsBtn").addEventListener("click", function(){
+    var el = document.documentElement;
+    var req = el.requestFullscreen || el.webkitRequestFullscreen;
+    keepAwake(); closePanel();
+    if (!req){ caption("Schermo intero non disponibile: apri la pagina da una scheda normale di Chrome.", 6000); return; }
+    var p;
+    try { p = req.call(el, {navigationUI:"hide"}); }
+    catch(err){ caption("Schermo intero bloccato: " + err.message, 6000); return; }
+    if (p && p.then){
+      p.then(function(){
+        if (screen.orientation && screen.orientation.lock) screen.orientation.lock("landscape").catch(function(){});
+      }).catch(function(err){ caption("Schermo intero bloccato: " + (err && err.message ? err.message : "motivo sconosciuto"), 6000); });
+    }
+  });
+})();
+</script>
+</body>
+</html>

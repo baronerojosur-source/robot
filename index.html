@@ -90,7 +90,7 @@ canvas{display:block;width:100%;height:100%;user-select:none;-webkit-user-select
 <div class="caption" id="caption">Tocca una volta per parlare, due volte per il menu</div>
 
 <div class="panel" id="panel" role="dialog" aria-label="Impostazioni del robot">
-  <h2>Collegamento a Claude (versione 5)</h2>
+  <h2>Collegamento a Claude (versione 6)</h2>
   <p class="note" id="lastLog">Ultimo messaggio: nessuno</p>
   <label class="field">Chiave API
     <input id="apiKey" type="password" autocomplete="off" placeholder="sk-ant-…">
@@ -115,6 +115,25 @@ canvas{display:block;width:100%;height:100%;user-select:none;-webkit-user-select
   <p class="note">Esempi: “cosa vedi?”, “come sto?”, “leggi questo”, “di che colore è?”. Le foto non vengono salvate.</p>
   <div class="row">
     <button class="chip" id="lookBtn" type="button">Prova la vista</button>
+  </div>
+  <h2>Telegram e sentinella</h2>
+  <label class="field">Token del bot Telegram
+    <input id="tgToken" type="password" autocomplete="off" placeholder="123456789:AA…">
+  </label>
+  <p class="note" id="tgStatus">Telegram non collegato.</p>
+  <div class="row">
+    <button class="chip" id="tgConnect" type="button">Collega Telegram</button>
+    <button class="chip" id="tgDisconnect" type="button">Scollega</button>
+  </div>
+  <label class="field">Sensibilità della sentinella
+    <select id="sens">
+      <option value="bassa">Bassa: solo movimenti grandi</option>
+      <option value="media">Media</option>
+      <option value="alta">Alta: anche piccoli movimenti</option>
+    </select>
+  </label>
+  <div class="row">
+    <button class="chip" id="sentBtn" type="button">Attiva sentinella</button>
   </div>
   <div class="row">
     <input id="typed" type="text" autocomplete="off" placeholder="Scrivi qui per provare senza voce">
@@ -205,6 +224,7 @@ window.addEventListener("error", function(e){
     if (state === "listening") return "attento";
     if (state === "thinking") return "pensa";
     if (state === "speaking") return speakMood;
+    if (sentinel.on) return "assonnato";
     return mood;
   }
 
@@ -250,6 +270,7 @@ window.addEventListener("error", function(e){
     ctx.restore();
   }
 
+  var sentinel = {on:false, stream:null, video:null, timer:null, prev:null, hits:0, lastAlert:0, alerts:[], small:null, armedAt:0, cx:0.5, lastEvent:0};
   // ---------- Sottotitoli disegnati sul viso ----------
   var cap = {text:"", until:0, alpha:0};
   function wrapLines(text, maxW){
@@ -338,6 +359,12 @@ window.addEventListener("error", function(e){
     ctx.fillStyle = "#000"; ctx.fillRect(0, 0, W, H);
     drawEye(0, cur[0], blinkAmt, breath);
     drawEye(1, cur[1], blinkAmt, breath);
+    if (sentinel.on){
+      ctx.fillStyle = "rgba(0,0,0,0.55)"; ctx.fillRect(0, 0, W, H);
+      ctx.fillStyle = "#ff5a4f"; ctx.beginPath(); ctx.arc(18, H - 18, 5, 0, Math.PI * 2); ctx.fill();
+      ctx.font = "14px 'Trebuchet MS', sans-serif"; ctx.fillStyle = "rgba(255,255,255,0.75)";
+      ctx.textAlign = "left"; ctx.textBaseline = "middle"; ctx.fillText("Sentinella attiva", 30, H - 18);
+    }
     drawCaption(now, dt);
     requestAnimationFrame(frame);
   }
@@ -427,7 +454,7 @@ window.addEventListener("error", function(e){
     if (wantPhoto){
       caption("Ti guardo…", 0);
       window.robot.lookAt(0, 0, 2500);
-      pre = takePhoto().catch(function(e){
+      pre = grabFrame().catch(function(e){
         caption("Non riesco a usare la fotocamera: " + (e && e.message ? e.message : e), 6000);
         return null;
       });
@@ -573,6 +600,7 @@ window.addEventListener("error", function(e){
     tapTimer = setTimeout(singleTap, 360);
   });
   function singleTap(){
+    if (sentinel.on && state === "idle"){ caption("Sentinella attiva: disattivala dal menu o da Telegram.", 4000); return; }
     if (state === "listening") stopListening();
     else if (state === "speaking"){ if ("speechSynthesis" in window) speechSynthesis.cancel(); setState("idle"); }
     else if (state === "idle") startListening();
@@ -631,6 +659,261 @@ window.addEventListener("error", function(e){
     ask("Cosa vedi in questo momento?", true);
   });
   typedEl.addEventListener("keydown", function(e){ if (e.key === "Enter") sendTyped(); });
+
+
+  // ================= Claude (chiamata diretta) =================
+  function claudeRaw(msgs, maxTokens){
+    var key = keyEl.value.trim();
+    if (!key) return Promise.reject(new Error("manca la chiave API"));
+    return fetch("https://api.anthropic.com/v1/messages", {
+      method:"POST",
+      headers:{
+        "content-type":"application/json",
+        "x-api-key":key,
+        "anthropic-version":"2023-06-01",
+        "anthropic-dangerous-direct-browser-access":"true"
+      },
+      body: JSON.stringify({ model: modelEl.value, max_tokens: maxTokens || 300, system: systemPrompt(), messages: msgs })
+    }).then(function(r){
+      return r.json().catch(function(){ return null; }).then(function(d){
+        if (!r.ok) throw new Error(apiError(r.status, d));
+        return (d.content || []).filter(function(b){ return b.type === "text"; }).map(function(b){ return b.text; }).join(" ").trim();
+      });
+    });
+  }
+  function splitMood(txt){
+    var m = txt.match(/^\s*\[([a-zàèéìòù]+)\]\s*/i), md = null;
+    if (m){ md = m[1].toLowerCase(); txt = txt.slice(m[0].length); }
+    txt = txt.replace(/\[[a-zàèéìòù]+\]/gi, "").replace(/[*_#`]/g, "").trim();
+    return { text: txt, mood: (md && MOODS[md] && !MOODS[md].hidden) ? md : "neutro" };
+  }
+  function describe(b64, instruction){
+    return claudeRaw([{role:"user", content:[
+      {type:"image", source:{type:"base64", media_type:"image/jpeg", data:b64}},
+      {type:"text", text:instruction}
+    ]}], 220).then(function(t){ return splitMood(t).text; });
+  }
+  function hhmm(){ var d = new Date(); return d.toLocaleTimeString("it-IT", {hour:"2-digit", minute:"2-digit"}); }
+
+  // ================= Fotogrammi =================
+  function grabFrame(){
+    var v = sentinel.video;
+    if (sentinel.on && v && v.videoWidth){
+      var w = 768, h = Math.round(w * v.videoHeight / v.videoWidth);
+      var c = document.createElement("canvas"); c.width = w; c.height = h;
+      c.getContext("2d").drawImage(v, 0, 0, w, h);
+      return Promise.resolve(c.toDataURL("image/jpeg", 0.8).split(",")[1]);
+    }
+    return takePhoto();
+  }
+
+  // ================= Sentinella =================
+  var sensEl = document.getElementById("sens");
+  sensEl.value = load("robot-sens", "media");
+  sensEl.addEventListener("change", function(){ save("robot-sens", sensEl.value); });
+  var sentBtn = document.getElementById("sentBtn");
+  function syncSentinelUI(){ sentBtn.textContent = sentinel.on ? "Disattiva sentinella" : "Attiva sentinella"; }
+
+  function startSentinel(){
+    if (sentinel.on) return Promise.resolve();
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return Promise.reject(new Error("fotocamera non disponibile"));
+    return navigator.mediaDevices.getUserMedia({video:{facingMode:"user", width:{ideal:1280}, height:{ideal:720}}, audio:false}).then(function(stream){
+      sentinel.stream = stream;
+      var v = document.createElement("video");
+      v.muted = true; v.playsInline = true; v.setAttribute("playsinline", ""); v.srcObject = stream;
+      sentinel.video = v;
+      return v.play();
+    }).then(function(){
+      sentinel.on = true; sentinel.prev = null; sentinel.hits = 0;
+      sentinel.armedAt = performance.now() + 4000;
+      sentinel.timer = setInterval(checkMotion, 700);
+      save("robot-sentinel", "1"); syncSentinelUI(); keepAwake();
+      caption("Sentinella attiva", 4000);
+    });
+  }
+  function stopSentinel(){
+    sentinel.on = false;
+    clearInterval(sentinel.timer);
+    if (sentinel.stream) sentinel.stream.getTracks().forEach(function(t){ t.stop(); });
+    sentinel.stream = null; sentinel.video = null;
+    save("robot-sentinel", "0"); syncSentinelUI();
+    caption("Sentinella disattivata", 3000);
+  }
+  function checkMotion(){
+    var v = sentinel.video;
+    if (!v || !v.videoWidth) return;
+    var c = sentinel.small || (sentinel.small = document.createElement("canvas"));
+    c.width = 64; c.height = 48;
+    var x = c.getContext("2d");
+    x.drawImage(v, 0, 0, 64, 48);
+    var d = x.getImageData(0, 0, 64, 48).data;
+    var n = 64 * 48, g = new Uint8Array(n);
+    for (var i = 0; i < n; i++) g[i] = (d[i*4] * 0.3 + d[i*4+1] * 0.59 + d[i*4+2] * 0.11) | 0;
+    var prev = sentinel.prev; sentinel.prev = g;
+    if (!prev || performance.now() < sentinel.armedAt) return;
+    var changed = 0, sx = 0;
+    for (var j = 0; j < n; j++) if (Math.abs(g[j] - prev[j]) > 28){ changed++; sx += j % 64; }
+    var thr = {alta:0.015, media:0.04, bassa:0.09}[sensEl.value] || 0.04;
+    if (changed / n > thr){ sentinel.hits++; sentinel.cx = (sx / changed) / 64; } else sentinel.hits = 0;
+    if (sentinel.hits >= 2){ sentinel.hits = 0; onMotion(sentinel.cx); }
+  }
+  function onMotion(cx){
+    var now = Date.now();
+    window.robot.lookAt(Math.max(-1, Math.min(1, (0.5 - cx) * 2)), 0, 3000);
+    window.robot.react("sorpreso", 1500);
+    if (now - sentinel.lastAlert < 60000) return;
+    sentinel.alerts = sentinel.alerts.filter(function(t){ return now - t < 3600000; });
+    if (sentinel.alerts.length >= 20) return;
+    sentinel.lastAlert = now; sentinel.alerts.push(now); sentinel.lastEvent = now;
+    var when = hhmm();
+    grabFrame().then(function(b64){
+      return describe(b64, "Sei in modalità sentinella: qualcosa si è mosso davanti a te. Descrivi in una o due frasi brevi cosa vedi, citando persone, animali o oggetti. Se non vedi niente di particolare, dillo.")
+        .catch(function(){ return "(descrizione non disponibile)"; })
+        .then(function(desc){
+          if (!tg.owner) return;
+          return tgSendPhoto(b64, "Movimento alle " + when + ". " + desc);
+        });
+    }).catch(function(e){ caption("Sentinella: " + (e && e.message ? e.message : e), 6000); });
+  }
+  sentBtn.addEventListener("click", function(){
+    closePanel();
+    if (sentinel.on) stopSentinel();
+    else startSentinel().catch(function(e){ caption("Non riesco ad attivare la sentinella: " + (e && e.message ? e.message : e), 6000); });
+  });
+
+  // ================= Telegram =================
+  var tg = {
+    token: load("robot-tg-token", ""),
+    owner: load("robot-tg-owner", ""),
+    offset: parseInt(load("robot-tg-offset", "0"), 10) || 0,
+    gen: 0, running: false, username: ""
+  };
+  var tgTokenEl = document.getElementById("tgToken");
+  var tgStatusEl = document.getElementById("tgStatus");
+  tgTokenEl.value = tg.token;
+  var HELP = "Comandi:\n/sentinella - attiva o disattiva la sentinella\n/foto - scatto una foto e ti dico cosa vedo\n/stato - come sto e cosa c’è intorno\n/di testo - lo dico ad alta voce in casa\nOppure scrivimi e ti rispondo come in chat.";
+
+  function syncTgUI(){
+    if (!tg.token) tgStatusEl.textContent = "Telegram non collegato.";
+    else if (!tg.owner) tgStatusEl.textContent = "In attesa: invia /start al tuo bot" + (tg.username ? " @" + tg.username : "") + " dal tuo telefono.";
+    else tgStatusEl.textContent = "Telegram collegato: rispondo solo al tuo account.";
+  }
+  function tgUrl(m){ return "https://api.telegram.org/bot" + tg.token + "/" + m; }
+  function tgSend(text){
+    if (!tg.owner) return Promise.resolve();
+    var body = new URLSearchParams({chat_id: tg.owner, text: String(text).slice(0, 4000)});
+    return fetch(tgUrl("sendMessage"), {method:"POST", body: body}).catch(function(){});
+  }
+  function tgSendPhoto(b64, cap){
+    return fetch("data:image/jpeg;base64," + b64).then(function(r){ return r.blob(); }).then(function(blob){
+      var fd = new FormData();
+      fd.append("chat_id", tg.owner);
+      fd.append("caption", String(cap).slice(0, 1000));
+      fd.append("photo", blob, "foto.jpg");
+      return fetch(tgUrl("sendPhoto"), {method:"POST", body: fd});
+    });
+  }
+  function statusText(){
+    var lines = [];
+    lines.push("Sentinella: " + (sentinel.on ? "attiva" : "spenta"));
+    if (sentinel.lastEvent) lines.push("Ultimo movimento: " + new Date(sentinel.lastEvent).toLocaleTimeString("it-IT", {hour:"2-digit", minute:"2-digit"}));
+    lines.push("Umore: " + (MOODS[mood] ? MOODS[mood].label : mood));
+    var p = (navigator.getBattery ? navigator.getBattery().then(function(b){
+      lines.push("Batteria: " + Math.round(b.level * 100) + "%" + (b.charging ? ", in carica" : ", NON in carica"));
+    }).catch(function(){}) : Promise.resolve());
+    return p.then(function(){ return lines.join("\n"); });
+  }
+  function chatRemote(text){
+    history.push({role:"user", content: text + " (scritto da Telegram, sono fuori casa)"});
+    while (history.length > 14) history.shift();
+    while (history.length && history[0].role !== "user") history.shift();
+    claudeRaw(history.slice(), 300).then(function(t){
+      history.push({role:"assistant", content:t});
+      var r = splitMood(t);
+      window.robot.react(r.mood, 2500);
+      tgSend(r.text);
+    }).catch(function(e){
+      if (history.length && history[history.length-1].role === "user") history.pop();
+      tgSend("Non riesco a pensare in questo momento: " + (e && e.message ? e.message : e));
+    });
+  }
+  function handleTg(msg){
+    var chatId = String(msg.chat && msg.chat.id);
+    var text = (msg.text || "").trim();
+    if (!tg.owner){
+      if (/^\/start/.test(text)){
+        tg.owner = chatId; save("robot-tg-owner", chatId); syncTgUI();
+        tgSend("Collegato! Da ora rispondo solo a te.\n\n" + HELP);
+        caption("Telegram collegato", 5000); window.robot.react("felice", 2500);
+      }
+      return;
+    }
+    if (chatId !== tg.owner) return;
+    var first = text.split(/\s+/)[0] || "";
+    var cmd = first.toLowerCase().replace(/@.*$/, "");
+    var arg = text.slice(first.length).trim().toLowerCase();
+    var argRaw = text.slice(first.length).trim();
+    if (cmd === "/start" || cmd === "/aiuto" || cmd === "/help"){ tgSend(HELP); return; }
+    if (cmd === "/sentinella"){
+      var want = (arg === "on" || arg === "attiva") ? true : (arg === "off" || arg === "spegni") ? false : !sentinel.on;
+      var pr = want ? startSentinel() : Promise.resolve(sentinel.on ? stopSentinel() : null);
+      pr.then(function(){ tgSend(sentinel.on ? "Sentinella attivata: ti avviso se vedo movimento." : "Sentinella disattivata."); })
+        .catch(function(e){ tgSend("Non riesco ad attivare la sentinella: " + (e && e.message ? e.message : e)); });
+      return;
+    }
+    if (cmd === "/foto"){
+      tgSend("Scatto…");
+      grabFrame().then(function(b64){
+        return describe(b64, "Descrivi in una o due frasi brevi cosa vedi in questo momento.")
+          .catch(function(){ return ""; })
+          .then(function(dsc){ return tgSendPhoto(b64, hhmm() + (dsc ? ". " + dsc : "")); });
+      }).catch(function(e){ tgSend("Non riesco a scattare: " + (e && e.message ? e.message : e)); });
+      return;
+    }
+    if (cmd === "/stato"){ statusText().then(tgSend); return; }
+    if (cmd === "/di"){
+      if (!argRaw){ tgSend("Scrivi cosa devo dire, ad esempio: /di Ciao a tutti!"); return; }
+      speak(argRaw, "felice"); tgSend("Detto ad alta voce."); return;
+    }
+    if (cmd === "/guarda"){ tgSend("Per girare la testa servono i servo: arriveranno presto!"); return; }
+    if (text && text.charAt(0) !== "/"){ chatRemote(text); return; }
+    tgSend("Comando non riconosciuto.\n\n" + HELP);
+  }
+  function tgPoll(gen){
+    if (gen !== tg.gen || !tg.token) return;
+    fetch(tgUrl("getUpdates") + "?timeout=25&offset=" + tg.offset).then(function(r){ return r.json(); }).then(function(d){
+      if (gen !== tg.gen) return;
+      if (!d.ok){
+        caption("Telegram: " + (d.description || "errore"), 6000);
+        if (d.error_code === 401){ tg.running = false; tgStatusEl.textContent = "Token non valido: controllalo."; return; }
+        setTimeout(function(){ tgPoll(gen); }, 10000); return;
+      }
+      (d.result || []).forEach(function(u){
+        tg.offset = u.update_id + 1; save("robot-tg-offset", String(tg.offset));
+        if (u.message){ try { handleTg(u.message); } catch(e){} }
+      });
+      tgPoll(gen);
+    }).catch(function(){ if (gen === tg.gen) setTimeout(function(){ tgPoll(gen); }, 5000); });
+  }
+  function tgStart(){ tg.gen++; tg.running = true; syncTgUI(); tgPoll(tg.gen); }
+  document.getElementById("tgConnect").addEventListener("click", function(){
+    var t = tgTokenEl.value.trim();
+    if (!t){ tgStatusEl.textContent = "Incolla prima il token del bot."; return; }
+    tgStatusEl.textContent = "Controllo il token…";
+    fetch("https://api.telegram.org/bot" + t + "/getMe").then(function(r){ return r.json(); }).then(function(d){
+      if (!d.ok){ tgStatusEl.textContent = "Token non valido: controllalo."; return; }
+      tg.token = t; tg.username = d.result.username || ""; save("robot-tg-token", t);
+      tgStart();
+    }).catch(function(){ tgStatusEl.textContent = "Non riesco a raggiungere Telegram: controlla il Wi-Fi."; });
+  });
+  document.getElementById("tgDisconnect").addEventListener("click", function(){
+    tg.gen++; tg.running = false; tg.token = ""; tg.owner = "";
+    save("robot-tg-token", ""); save("robot-tg-owner", "");
+    tgTokenEl.value = ""; syncTgUI();
+  });
+  syncTgUI();
+  if (tg.token) tgStart();
+  if (load("robot-sentinel", "0") === "1") setTimeout(function(){ startSentinel().catch(function(){}); }, 1500);
 
   // ================= Schermo intero e schermo acceso =================
   function keepAwake(){

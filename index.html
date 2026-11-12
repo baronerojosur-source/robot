@@ -90,7 +90,7 @@ canvas{display:block;width:100%;height:100%;user-select:none;-webkit-user-select
 <div class="caption" id="caption">Tocca una volta per parlare, due volte per il menu</div>
 
 <div class="panel" id="panel" role="dialog" aria-label="Impostazioni del robot">
-  <h2>Collegamento a Claude (versione 6.3)</h2>
+  <h2>Collegamento a Claude (versione 6.4)</h2>
   <p class="note" id="lastLog">Ultimo messaggio: nessuno</p>
   <label class="field">Chiave API
     <input id="apiKey" type="password" autocomplete="off" placeholder="sk-ant-…">
@@ -794,12 +794,39 @@ window.addEventListener("error", function(e){
     token: load("robot-tg-token", ""),
     owner: load("robot-tg-owner", ""),
     offset: parseInt(load("robot-tg-offset", "0"), 10) || 0,
-    gen: 0, running: false, username: ""
+    gen: 0, running: false, username: "", waitSay: false
   };
   var tgTokenEl = document.getElementById("tgToken");
   var tgStatusEl = document.getElementById("tgStatus");
   tgTokenEl.value = tg.token;
-  var HELP = "Comandi:\n/sentinella - attiva o disattiva la sentinella\n/foto - scatto una foto e ti dico cosa vedo\n/stato - come sto e cosa c’è intorno\n/di testo - lo dico ad alta voce in casa\nOppure scrivimi e ti rispondo come in chat.";
+  var HELP = "Usa i pulsanti qui sotto:\n🛡️ Sentinella - la attivo o la spengo\n📷 Foto - scatto una foto e ti dico cosa vedo\n📊 Stato - come sto e cosa c’è intorno\n🔊 Fai parlare - mi scrivi una frase e la dico ad alta voce in casa\nOppure scrivimi e ti rispondo come in chat.";
+  // tastiera a pulsanti fissa nella chat (il pulsante della sentinella cambia con lo stato)
+  function tgKeyboard(){
+    return JSON.stringify({ keyboard: [
+      [{text: sentinel.on ? "🛡️ Spegni sentinella" : "🛡️ Attiva sentinella"}, {text: "📷 Foto"}],
+      [{text: "📊 Stato"}, {text: "🔊 Fai parlare"}, {text: "❓ Aiuto"}]
+    ], resize_keyboard: true, is_persistent: true });
+  }
+  function mapButton(t){
+    var x = t.toLowerCase();
+    if (x.indexOf("spegni sentinella") >= 0) return "/sentinella off";
+    if (x.indexOf("attiva sentinella") >= 0) return "/sentinella on";
+    if (/^\W*foto$/.test(x)) return "/foto";
+    if (/^\W*stato$/.test(x)) return "/stato";
+    if (x.indexOf("fai parlare") >= 0) return "/di";
+    if (/^\W*aiuto$/.test(x)) return "/aiuto";
+    return null;
+  }
+  function tgSetCommands(){
+    var cmds = [
+      {command: "sentinella", description: "Attiva o spegni la sentinella"},
+      {command: "foto", description: "Scatta una foto e dimmi cosa vedi"},
+      {command: "stato", description: "Come stai e cosa c’è intorno"},
+      {command: "di", description: "Dì una frase ad alta voce in casa"},
+      {command: "aiuto", description: "Mostra i pulsanti e i comandi"}
+    ];
+    fetch(tgUrl("setMyCommands"), {method:"POST", body: new URLSearchParams({commands: JSON.stringify(cmds)})}).catch(function(){});
+  }
 
   function syncTgUI(){
     if (!tg.token) tgStatusEl.textContent = "Telegram non collegato.";
@@ -809,7 +836,7 @@ window.addEventListener("error", function(e){
   function tgUrl(m){ return "https://api.telegram.org/bot" + tg.token + "/" + m; }
   function tgSend(text){
     if (!tg.owner) return Promise.resolve();
-    var body = new URLSearchParams({chat_id: tg.owner, text: String(text).slice(0, 4000)});
+    var body = new URLSearchParams({chat_id: tg.owner, text: String(text).slice(0, 4000), reply_markup: tgKeyboard()});
     return fetch(tgUrl("sendMessage"), {method:"POST", body: body}).catch(function(){});
   }
   function tgSendPhoto(b64, cap){
@@ -817,6 +844,7 @@ window.addEventListener("error", function(e){
       var fd = new FormData();
       fd.append("chat_id", tg.owner);
       fd.append("caption", String(cap).slice(0, 1000));
+      fd.append("reply_markup", tgKeyboard());
       fd.append("photo", blob, "foto.jpg");
       return fetch(tgUrl("sendPhoto"), {method:"POST", body: fd});
     });
@@ -857,6 +885,12 @@ window.addEventListener("error", function(e){
       return;
     }
     if (chatId !== tg.owner) return;
+    var mapped = mapButton(text);
+    if (mapped) text = mapped;
+    if (tg.waitSay){
+      tg.waitSay = false;
+      if (text && text.charAt(0) !== "/"){ speak(text, "felice"); tgSend("Detto ad alta voce."); return; }
+    }
     var first = text.split(/\s+/)[0] || "";
     var cmd = first.toLowerCase().replace(/@.*$/, "");
     var arg = text.slice(first.length).trim().toLowerCase();
@@ -880,7 +914,7 @@ window.addEventListener("error", function(e){
     }
     if (cmd === "/stato"){ statusText().then(tgSend); return; }
     if (cmd === "/di"){
-      if (!argRaw){ tgSend("Scrivi cosa devo dire, ad esempio: /di Ciao a tutti!"); return; }
+      if (!argRaw){ tg.waitSay = true; tgSend("Scrivimi la frase da dire ad alta voce in casa."); return; }
       speak(argRaw, "felice"); tgSend("Detto ad alta voce."); return;
     }
     if (cmd === "/guarda"){ tgSend("Per girare la testa servono i servo: arriveranno presto!"); return; }
@@ -903,7 +937,7 @@ window.addEventListener("error", function(e){
       tgPoll(gen);
     }).catch(function(){ if (gen === tg.gen) setTimeout(function(){ tgPoll(gen); }, 5000); });
   }
-  function tgStart(){ tg.gen++; tg.running = true; syncTgUI(); tgPoll(tg.gen); }
+  function tgStart(){ tg.gen++; tg.running = true; syncTgUI(); tgSetCommands(); tgPoll(tg.gen); }
   document.getElementById("tgConnect").addEventListener("click", function(){
     var t = tgTokenEl.value.trim();
     if (!t){ tgStatusEl.textContent = "Incolla prima il token del bot."; return; }

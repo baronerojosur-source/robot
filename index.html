@@ -80,8 +80,10 @@ canvas{display:block;width:100%;height:100%;user-select:none;-webkit-user-select
   border:1.5px solid var(--chip-line);background:var(--chip);color:var(--chip-ink);
 }
 .row input{flex:1 1 200px}
+.field textarea{font:inherit;font-size:15px;min-height:96px;padding:8px 12px;border-radius:12px;resize:vertical;
+  border:1.5px solid var(--chip-line);background:var(--chip);color:var(--chip-ink)}
 .note{font-size:14px;color:var(--panel-muted);margin:-4px 0 10px}
-.chip:focus-visible,.swatch:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid #3ff0dc;outline-offset:2px}
+.chip:focus-visible,.swatch:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:3px solid #3ff0dc;outline-offset:2px}
 @media (prefers-reduced-motion: reduce){.panel{transition:none}}
 </style>
 </head>
@@ -90,14 +92,14 @@ canvas{display:block;width:100%;height:100%;user-select:none;-webkit-user-select
 <div class="caption" id="caption">Tocca una volta per parlare, due volte per il menu</div>
 
 <div class="panel" id="panel" role="dialog" aria-label="Impostazioni del robot">
-  <h2>Collegamento a Claude (versione 6.4)</h2>
+  <h2>Collegamento a Claude (versione 6.5)</h2>
   <p class="note" id="lastLog">Ultimo messaggio: nessuno</p>
   <label class="field">Chiave API
     <input id="apiKey" type="password" autocomplete="off" placeholder="sk-ant-…">
   </label>
   <p class="note">La chiave resta salvata solo su questo telefono.</p>
   <label class="field">Nome del robot
-    <input id="robotName" type="text" autocomplete="off" placeholder="Robot">
+    <input id="robotName" type="text" autocomplete="off" placeholder="Rojo">
   </label>
   <label class="field">Modello
     <select id="model">
@@ -116,6 +118,37 @@ canvas{display:block;width:100%;height:100%;user-select:none;-webkit-user-select
   <div class="row">
     <button class="chip" id="lookBtn" type="button">Prova la vista</button>
   </div>
+  <h2>Conversazione e memoria</h2>
+  <label class="field">Dopo la risposta
+    <select id="followup">
+      <option value="si">Resta in ascolto per continuare</option>
+      <option value="no">Torna in attesa</option>
+    </select>
+  </label>
+  <p class="note">Se resta in ascolto e non dici niente per qualche secondo, torna in attesa da solo.</p>
+  <label class="field">Memoria (una cosa per riga)
+    <textarea id="memoryText" placeholder="Es.: Dannier ha costruito Rojo"></textarea>
+  </label>
+  <p class="note">Rojo aggiunge da solo quello che gli chiedi di ricordare (“ricordati che…”) e toglie quello che gli chiedi di dimenticare.</p>
+  <div class="row">
+    <button class="chip" id="memSave" type="button">Salva memoria</button>
+    <button class="chip" id="memClear" type="button">Cancella memoria</button>
+  </div>
+  <h2>Parola chiave</h2>
+  <label class="field">Ascolto della parola chiave
+    <select id="wakeMode">
+      <option value="0">Spento</option>
+      <option value="1">Acceso</option>
+    </select>
+  </label>
+  <label class="field">Parola da dire
+    <input id="wakeWord" type="text" autocomplete="off" placeholder="rojo">
+  </label>
+  <p class="note" id="wakeStatus">Spento.</p>
+  <p class="note">L’ascolto avviene solo sul telefono, niente va in rete finché non sente la parola. La prima volta scarica il modello vocale spagnolo (circa 35 MB): usa il Wi-Fi.</p>
+  <label class="field">Indirizzo del modello vocale
+    <input id="wakeUrl" type="text" autocomplete="off">
+  </label>
   <h2>Telegram e sentinella</h2>
   <label class="field">Token del bot Telegram
     <input id="tgToken" type="password" autocomplete="off" placeholder="123456789:AA…">
@@ -385,6 +418,8 @@ window.addEventListener("error", function(e){
 
   // ================= Claude =================
   var history = [];
+  try { history = JSON.parse(load("robot-history", "[]")) || []; } catch(e){ history = []; }
+  while (history.length && history[0].role !== "user") history.shift();
   var keyEl = document.getElementById("apiKey");
   var nameEl = document.getElementById("robotName");
   var modelEl = document.getElementById("model");
@@ -419,7 +454,7 @@ window.addEventListener("error", function(e){
   }
 
   function systemPrompt(){
-    var name = nameEl.value.trim() || "Robot";
+    var name = nameEl.value.trim() || "Rojo";
     return "Sei " + name + ", un piccolo robot da scrivania. Il tuo viso è lo schermo di un vecchio smartphone Xperia, " +
       "con due occhi animati; presto avrai anche un collo motorizzato. Parli in italiano con la persona che ti ha costruito, " +
       "con un carattere curioso, simpatico e un po’ giocoso. Le tue risposte vengono lette ad alta voce da una sintesi vocale: " +
@@ -429,8 +464,52 @@ window.addEventListener("error", function(e){
       "Esempio: [felice] Ciao! Che bello sentirti. " +
       "A volte riceverai una foto: è quello che vedi in questo momento con la tua fotocamera, sopra gli occhi. " +
       "Parlane in prima persona e con naturalezza, come se stessi guardando, senza dire che è una foto. " +
-      "Se non ricevi una foto non puoi vedere nulla: se te lo chiedono, dillo con simpatia.";
+      "Se non ricevi una foto non puoi vedere nulla: se te lo chiedono, dillo con simpatia. " +
+      "Ti chiamano dicendo il tuo nome; parla con chiunque in casa, non solo con chi ti ha costruito. " +
+      "Adesso sono le " + hhmm() + " di " + new Date().toLocaleDateString("it-IT", {weekday:"long", day:"numeric", month:"long"}) + ": usalo per salutare in modo adatto, senza ripeterlo sempre. " +
+      memoryPrompt() +
+      "Se ti chiedono di ricordare qualcosa, o scopri un’informazione stabile e utile su chi vive in casa (nomi, gusti, abitudini), " +
+      "aggiungi alla fine della risposta un’etichetta [ricorda: frase breve in terza persona]. " +
+      "Se ti chiedono di dimenticare qualcosa, aggiungi alla fine [dimentica: parola chiave]. Queste etichette non vengono lette ad alta voce.";
   }
+  // ================= Memoria =================
+  var memEl = document.getElementById("memoryText");
+  function memLines(){ return load("robot-memory", "").split("\n").map(function(l){ return l.trim(); }).filter(Boolean); }
+  function memSet(lines){ while (lines.length > 40) lines.shift(); save("robot-memory", lines.join("\n")); memEl.value = lines.join("\n"); }
+  memEl.value = memLines().join("\n");
+  function memoryPrompt(){
+    var l = memLines();
+    if (!l.length) return "";
+    return "Cose che ricordi di chi vive in casa: " + l.join("; ") + ". ";
+  }
+  // toglie le etichette [ricorda: …] e [dimentica: …], le applica e restituisce il testo pulito
+  function applyMemoryTags(txt){
+    var changed = false, lines = memLines();
+    txt = txt.replace(/\[\s*ricorda\s*:\s*([^\]]+)\]/gi, function(_, f){
+      f = f.trim(); if (f && lines.map(function(x){ return x.toLowerCase(); }).indexOf(f.toLowerCase()) < 0){ lines.push(f); changed = true; }
+      return "";
+    });
+    txt = txt.replace(/\[\s*dimentica\s*:\s*([^\]]+)\]/gi, function(_, k){
+      k = k.trim().toLowerCase(); var n = lines.length;
+      if (k) lines = lines.filter(function(x){ return x.toLowerCase().indexOf(k) < 0; });
+      if (lines.length !== n) changed = true;
+      return "";
+    });
+    if (changed) memSet(lines);
+    return txt.trim();
+  }
+  document.getElementById("memSave").addEventListener("click", function(){
+    memSet(memEl.value.split("\n").map(function(l){ return l.trim(); }).filter(Boolean));
+    caption("Memoria salvata.", 3000);
+  });
+  document.getElementById("memClear").addEventListener("click", function(){
+    if (!confirm("Cancello tutto quello che Rojo ricorda?")) return;
+    memSet([]); caption("Memoria cancellata.", 3000); window.robot.react("sorpreso", 1200);
+  });
+  var followEl = document.getElementById("followup");
+  followEl.value = load("robot-followup", "si");
+  followEl.addEventListener("change", function(){ save("robot-followup", followEl.value); });
+  function saveHistory(){ try { save("robot-history", JSON.stringify(history.slice(-14))); } catch(e){} }
 
   function apiError(status, data){
     var msg = data && data.error && data.error.message ? data.error.message : "";
@@ -440,7 +519,7 @@ window.addEventListener("error", function(e){
     return "Errore " + status + (msg ? ": " + msg : "");
   }
 
-  function ask(text, forceVision){
+  function ask(text, forceVision, fromVoice){
     var key = keyEl.value.trim();
     if (!key){ caption("Inserisci la chiave API nel menu (doppio tocco).", 6000); window.robot.react("dubbioso", 2500); setState("idle"); return; }
     setState("thinking");
@@ -483,28 +562,26 @@ window.addEventListener("error", function(e){
       },
       body: JSON.stringify({
         model: modelEl.value,
-        max_tokens: 300,
+        max_tokens: 400,
+        stream: true,
         system: systemPrompt(),
         messages: msgs
       })
     }); }).then(function(r){
-      clearTimeout(timeout);
-      return r.json().catch(function(){ return null; }).then(function(d){ return {ok:r.ok, status:r.status, data:d}; });
-    }).then(function(res){
-      if (!res.ok) throw new Error(apiError(res.status, res.data));
-      var txt = (res.data.content || []).filter(function(b){ return b.type === "text"; })
-        .map(function(b){ return b.text; }).join(" ").trim();
-      history.push({role:"assistant", content:txt});
-      var m = txt.match(/^\s*\[([a-zàèéìòù]+)\]\s*/i);
-      var md = null;
-      if (m){ md = m[1].toLowerCase(); txt = txt.slice(m[0].length); }
-      txt = txt.replace(/\[[a-zàèéìòù]+\]/gi, "").replace(/[*_#`]/g, "").trim();
-      speak(txt, (md && MOODS[md] && !MOODS[md].hidden) ? md : "neutro");
+      if (!r.ok){
+        clearTimeout(timeout);
+        return r.json().catch(function(){ return null; }).then(function(d){ throw new Error(apiError(r.status, d)); });
+      }
+      return streamAnswer(r, !!fromVoice).then(function(full){ clearTimeout(timeout); return full; });
+    }).then(function(full){
+      history.push({role:"assistant", content:full});
+      saveHistory();
     }).catch(function(err){
       clearTimeout(timeout);
+      if (state === "speaking" && talk.text){ talk.ended = true; talkCheck(); }
       if (err && err.name === "AbortError") err = new Error("Claude non ha risposto entro 35 secondi: controlla la connessione.");
       if (history.length && history[history.length-1].role === "user") history.pop();
-      setState("idle");
+      if (state !== "speaking") setState("idle");
       var msg = err && err.message ? err.message : "Errore sconosciuto";
       if (/Failed to fetch|NetworkError/i.test(msg)) msg = "Non riesco a raggiungere Claude (" + msg + "). Controlla il Wi-Fi.";
       caption(msg, 8000);
@@ -528,28 +605,121 @@ window.addEventListener("error", function(e){
     try { var u = new SpeechSynthesisUtterance(" "); u.volume = 0; speechSynthesis.speak(u); } catch(e){}
   }
 
+  // la risposta viene detta a frasi, mentre arriva: la prima frase parte subito
   var speakGuard = null;
-  function speak(text, md){
+  var talk = {gen:0, pending:0, ended:true, text:"", followup:false, queued:0};
+  function talkBegin(md, followup){
+    talk.gen++; talk.pending = 0; talk.ended = false; talk.text = ""; talk.followup = !!followup; talk.queued = 0;
     speakMood = md || "neutro";
     setState("speaking");
-    caption(text, 0);
-    var finish = function(){
-      clearTimeout(speakGuard);
-      if (state !== "speaking") return;
-      setState("idle");
-      window.robot.react(speakMood, 2500);
-      caption(text, 4000);
-    };
-    speakGuard = setTimeout(finish, 4000 + text.length * 110);
+    if ("speechSynthesis" in window) speechSynthesis.cancel();
+  }
+  function talkGuard(){
+    clearTimeout(speakGuard);
+    speakGuard = setTimeout(function(){ talk.ended = true; talk.pending = 0; talkCheck(); }, 6000 + talk.queued * 110);
+  }
+  function talkChunk(t){
+    t = t.replace(/\[[^\]]*\]/g, "").replace(/[*_#`]/g, "").trim();
+    if (!t) return;
+    talk.text += (talk.text ? " " : "") + t;
+    talk.queued += t.length;
+    caption(talk.text, 0);
+    talkGuard();
     if (!("speechSynthesis" in window)) return;
-    var u = new SpeechSynthesisUtterance(text);
+    var g = talk.gen;
+    var u = new SpeechSynthesisUtterance(t);
     u.lang = "it-IT";
     var v = italianVoice(); if (v) u.voice = v;
     u.rate = 1.05; u.pitch = 1.15;
     u.onboundary = function(){ talkPulse = 1; };
-    u.onend = finish; u.onerror = finish;
-    speechSynthesis.cancel();
+    u.onend = u.onerror = function(){ if (g !== talk.gen) return; talk.pending--; talk.queued = Math.max(0, talk.queued - t.length); talkCheck(); };
+    talk.pending++;
     speechSynthesis.speak(u);
+  }
+  function talkEnd(){ talk.ended = true; talkGuard(); talkCheck(); }
+  function talkCheck(){
+    if (!talk.ended || talk.pending > 0) return;
+    clearTimeout(speakGuard);
+    if (state !== "speaking") return;
+    setState("idle");
+    window.robot.react(speakMood, 2500);
+    caption(talk.text, 4000);
+    afterSpeech();
+  }
+  function talkStop(){ talk.gen++; talk.followup = false; clearTimeout(speakGuard); if ("speechSynthesis" in window) speechSynthesis.cancel(); }
+  function speak(text, md){ talkBegin(md, false); talkChunk(text); talkEnd(); }
+
+  // legge la risposta in streaming: umore, frasi complete, etichette di memoria alla fine
+  function streamAnswer(r, fromVoice){
+    var all = "", spoken = 0, moodDone = false, stopSpeak = false;
+    function pump(final){
+      var body = all;
+      if (!moodDone){
+        var m = body.match(/^\s*\[([a-zàèéìòù]+)\]\s*/i);
+        if (!m && !final && body.length < 24 && body.indexOf("]") < 0) return;
+        var md = m ? m[1].toLowerCase() : "neutro";
+        talkBegin((MOODS[md] && !MOODS[md].hidden) ? md : "neutro", fromVoice);
+        spoken = m ? m[0].length : 0;
+        moodDone = true;
+      }
+      if (stopSpeak) return;
+      var rest = body.slice(spoken);
+      var re = /[^.!?…]*[.!?…]+["”»)]*\s+/g, mm, last = 0;
+      while ((mm = re.exec(rest))){
+        var sent = mm[0];
+        if (/\[\s*(ricorda|dimentica)/i.test(sent)){ var cut = sent.search(/\[\s*(ricorda|dimentica)/i); talkChunk(sent.slice(0, cut)); stopSpeak = true; spoken += last + sent.length; return; }
+        talkChunk(sent);
+        last = re.lastIndex;
+      }
+      spoken += last;
+      if (final){
+        var tail = body.slice(spoken), c2 = tail.search(/\[\s*(ricorda|dimentica)/i);
+        talkChunk(c2 >= 0 ? tail.slice(0, c2) : tail);
+        spoken = body.length;
+      }
+    }
+    function finish(){
+      pump(true);
+      var hadMem = /\[\s*(ricorda|dimentica)/i.test(all);
+      applyMemoryTags(all);
+      if (hadMem) talk.text += " (memoria aggiornata)";
+      talkEnd();
+      return all.trim();
+    }
+    if (!r.body || !r.body.getReader){
+      return r.text().then(function(t){
+        t.split("\n").forEach(function(line){ all += sseText(line); });
+        return finish();
+      });
+    }
+    var reader = r.body.getReader(), dec = new TextDecoder(), buf = "";
+    function step(){
+      return reader.read().then(function(res){
+        if (res.done) return finish();
+        buf += dec.decode(res.value, {stream:true});
+        var lines = buf.split("\n"); buf = lines.pop();
+        lines.forEach(function(line){ all += sseText(line); });
+        pump(false);
+        return step();
+      });
+    }
+    return step();
+  }
+  function sseText(line){
+    if (line.indexOf("data:") !== 0) return "";
+    var d = null;
+    try { d = JSON.parse(line.slice(5)); } catch(e){ return ""; }
+    if (d && d.type === "content_block_delta" && d.delta && d.delta.type === "text_delta") return d.delta.text;
+    if (d && d.type === "error") throw new Error("Claude si è interrotto: " + (d.error && d.error.message ? d.error.message : "errore sconosciuto"));
+    return "";
+  }
+
+  // dopo la risposta: se la conversazione era a voce, resta in ascolto per un po'
+  function afterSpeech(){
+    wake.holdUntil = performance.now() + 1500;
+    if (talk.followup && followEl.value === "si" && !sentinel.on){
+      setTimeout(function(){ if (state === "idle") startListening(true); }, 350);
+    }
   }
 
   var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -561,21 +731,27 @@ window.addEventListener("error", function(e){
     if (code === "audio-capture") return "Non trovo il microfono.";
     return "Errore del microfono: " + code;
   }
-  function startListening(){
+  function startListening(followup){
+    wakePause();
     if (!keyEl.value.trim()){ caption("Inserisci la chiave API nel menu (doppio tocco).", 6000); window.robot.react("dubbioso", 2500); return; }
     if (!SR){ caption("Riconoscimento vocale non disponibile: usa il campo di testo nel menu.", 7000); return; }
     var got = false;
     rec = new SR();
     rec.lang = "it-IT"; rec.interimResults = false; rec.maxAlternatives = 1;
-    rec.onresult = function(e){ got = true; ask(e.results[0][0].transcript); };
-    rec.onerror = function(e){ if (state === "listening") setState("idle"); caption(micError(e.error), 6000); };
-    var guard = setTimeout(function(){ if (state === "listening") stopListening(); }, 12000);
+    rec.onresult = function(e){ got = true; ask(e.results[0][0].transcript, false, true); };
+    rec.onerror = function(e){
+      if (state === "listening") setState("idle");
+      if (followup && (e.error === "no-speech" || e.error === "aborted")){ caption("…", 1200); return; }
+      caption(micError(e.error), 6000);
+    };
+    var guard = setTimeout(function(){ if (state === "listening") stopListening(); }, followup ? 7000 : 12000);
     rec.onend = function(){
       clearTimeout(guard);
-      if (!got && state === "listening"){ setState("idle"); caption("Non ho sentito nulla. Tocca e riprova.", 3000); }
+      wake.holdUntil = performance.now() + 800;
+      if (!got && state === "listening"){ setState("idle"); caption(followup ? "…" : "Non ho sentito nulla. Tocca e riprova.", followup ? 1200 : 3000); }
     };
     setState("listening");
-    caption("Ti ascolto…", 0);
+    caption(followup ? "Ti ascolto ancora…" : "Ti ascolto…", 0);
     try { rec.start(); } catch(e){ setState("idle"); caption("Il microfono non è partito: riprova.", 5000); }
   }
   function stopListening(){ try { if (rec) rec.stop(); } catch(e){} }
@@ -606,7 +782,7 @@ window.addEventListener("error", function(e){
   function singleTap(){
     if (sentinel.on && state === "idle"){ caption("Sentinella attiva: disattivala dal menu o da Telegram.", 4000); return; }
     if (state === "listening") stopListening();
-    else if (state === "speaking"){ if ("speechSynthesis" in window) speechSynthesis.cancel(); setState("idle"); }
+    else if (state === "speaking"){ talkStop(); setState("idle"); }
     else if (state === "idle") startListening();
   }
 
@@ -643,14 +819,14 @@ window.addEventListener("error", function(e){
   function closePanel(){ panel.classList.remove("open"); if (document.activeElement) document.activeElement.blur(); }
   document.getElementById("closeBtn").addEventListener("click", closePanel);
   document.getElementById("resetBtn").addEventListener("click", function(){
-    history = []; closePanel(); caption("Conversazione ricominciata.", 3000); window.robot.react("sorpreso", 1200);
+    history = []; saveHistory(); closePanel(); caption("Conversazione ricominciata.", 3000); window.robot.react("sorpreso", 1200);
   });
 
   var typedEl = document.getElementById("typed");
   function sendTyped(){
     var t = typedEl.value.trim();
     if (!t){ caption("Scrivi prima un messaggio nel campo di testo.", 4000); return; }
-    if (state !== "idle"){ if ("speechSynthesis" in window) speechSynthesis.cancel(); setState("idle"); }
+    if (state !== "idle"){ talkStop(); if (state === "listening") stopListening(); setState("idle"); }
     primeSpeech();
     typedEl.value = "";
     closePanel();
@@ -865,6 +1041,8 @@ window.addEventListener("error", function(e){
     while (history.length && history[0].role !== "user") history.shift();
     claudeRaw(history.slice(), 300).then(function(t){
       history.push({role:"assistant", content:t});
+      saveHistory();
+      t = applyMemoryTags(t);
       var r = splitMood(t);
       window.robot.react(r.mood, 2500);
       tgSend(r.text);
@@ -956,6 +1134,103 @@ window.addEventListener("error", function(e){
   syncTgUI();
   if (tg.token) tgStart();
   if (load("robot-sentinel", "0") === "1") setTimeout(function(){ startSentinel().catch(function(){}); }, 1500);
+
+  // ================= Parola chiave "Rojo" (Vosk, tutto sul telefono) =================
+  var VOSK_JS = "https://cdn.jsdelivr.net/npm/vosk-browser@0.0.8/dist/vosk.js";
+  var VOSK_MODEL = "https://ccoreilly.github.io/vosk-browser/models/vosk-model-small-es-0.3.tar.gz";
+  var wakeModeEl = document.getElementById("wakeMode"), wakeWordEl = document.getElementById("wakeWord");
+  var wakeUrlEl = document.getElementById("wakeUrl"), wakeStatusEl = document.getElementById("wakeStatus");
+  wakeModeEl.value = load("robot-wake", "0");
+  wakeWordEl.value = load("robot-wake-word", "rojo");
+  wakeUrlEl.value = load("robot-wake-url", VOSK_MODEL);
+  var wake = {model:null, loading:null, rec:null, ctx:null, stream:null, src:null, node:null, running:false, starting:false, lastFire:0, holdUntil:0, heard:""};
+  function wakeStatus(t){ wakeStatusEl.textContent = t; }
+  function wakeRe(){
+    var w = (wakeWordEl.value.trim() || "rojo").toLowerCase().replace(/[^a-zà-ÿ ]/g, "");
+    var alts = [w];
+    if (w === "rojo") alts = ["rojo", "roja", "rojos", "royo", "rollo"];   // pronunce vicine
+    return new RegExp("(^|\\s)(" + alts.join("|") + ")(\\s|$)", "i");
+  }
+  function loadScript(src){
+    return new Promise(function(res, rej){
+      if (window.Vosk) return res();
+      var s = document.createElement("script"); s.src = src; s.onload = res;
+      s.onerror = function(){ rej(new Error("non riesco a scaricare la libreria vocale")); };
+      document.head.appendChild(s);
+    });
+  }
+  function wakeLoad(){
+    if (wake.model) return Promise.resolve(wake.model);
+    if (wake.loading) return wake.loading;
+    wakeStatus("Scarico il modello vocale (circa 35 MB, solo la prima volta)…");
+    wake.loading = loadScript(VOSK_JS).then(function(){
+      return window.Vosk.createModel(wakeUrlEl.value.trim() || VOSK_MODEL, -2);
+    }).then(function(m){ wake.model = m; wake.loading = null; return m; }, function(e){ wake.loading = null; throw e; });
+    return wake.loading;
+  }
+  function wakeCheck(t){
+    if (!t) return;
+    wake.heard = t;
+    if (!wakeRe().test(" " + t + " ")) return;
+    var now = performance.now();
+    if (now - wake.lastFire < 3000) return;
+    wake.lastFire = now;
+    wakeFire();
+  }
+  function wakeResume(){
+    if (wake.running || wake.starting || wakeModeEl.value !== "1") return;
+    wake.starting = true;
+    wakeLoad().then(function(model){
+      if (!(state === "idle" && wakeModeEl.value === "1")) throw "skip";
+      return navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true, noiseSuppression:true, channelCount:1}, video:false}).then(function(stream){
+        if (!(state === "idle" && wakeModeEl.value === "1")){ stream.getTracks().forEach(function(t){ t.stop(); }); throw "skip"; }
+        if (!wake.ctx) wake.ctx = new (window.AudioContext || window.webkitAudioContext)();
+        if (wake.ctx.state === "suspended") wake.ctx.resume().catch(function(){});
+        if (!wake.rec){
+          wake.rec = new model.KaldiRecognizer(wake.ctx.sampleRate);
+          wake.rec.on("partialresult", function(m){ wakeCheck(m.result && m.result.partial); });
+          wake.rec.on("result", function(m){ wakeCheck(m.result && m.result.text); });
+        }
+        wake.stream = stream;
+        wake.src = wake.ctx.createMediaStreamSource(stream);
+        wake.node = wake.ctx.createScriptProcessor(4096, 1, 1);
+        wake.node.onaudioprocess = function(ev){ if (wake.running) { try { wake.rec.acceptWaveform(ev.inputBuffer); } catch(e){} } };
+        wake.src.connect(wake.node); wake.node.connect(wake.ctx.destination);
+        wake.running = true;
+        wakeStatus("In ascolto della parola “" + (wakeWordEl.value.trim() || "rojo") + "”." + (wake.ctx.state === "suspended" ? " Tocca lo schermo una volta per attivare l’audio." : ""));
+      });
+    }).catch(function(e){
+      if (e !== "skip"){ wakeStatus("Parola chiave non disponibile: " + (e && e.message ? e.message : e)); }
+    }).then(function(){ wake.starting = false; });
+  }
+  function wakePause(){
+    if (!wake.running) return;
+    wake.running = false;
+    try { wake.src.disconnect(); wake.node.disconnect(); } catch(e){}
+    if (wake.stream) wake.stream.getTracks().forEach(function(t){ t.stop(); });
+    wake.stream = wake.src = wake.node = null;
+  }
+  function wakeFire(){
+    if (state !== "idle" || sentinel.on) return;
+    wakePause();
+    window.robot.react("sorpreso", 700);
+    caption("Sì?", 0);
+    setTimeout(function(){ if (state === "idle") startListening(); }, 300);   // il tempo di liberare il microfono
+  }
+  // controlla ogni mezzo secondo se l'ascolto della parola chiave deve girare
+  setInterval(function(){
+    var want = wakeModeEl.value === "1" && state === "idle" && !sentinel.on && performance.now() > wake.holdUntil && document.visibilityState === "visible";
+    if (want) wakeResume(); else wakePause();
+  }, 500);
+  document.addEventListener("pointerdown", function(){ if (wake.ctx && wake.ctx.state === "suspended") wake.ctx.resume().then(function(){ if (wake.running) wakeStatus("In ascolto della parola “" + (wakeWordEl.value.trim() || "rojo") + "”."); }).catch(function(){}); });
+  wakeModeEl.addEventListener("change", function(){
+    save("robot-wake", wakeModeEl.value);
+    if (wakeModeEl.value === "1"){ wakeStatus("Avvio…"); if (!wake.ctx){ try { wake.ctx = new (window.AudioContext || window.webkitAudioContext)(); } catch(e){} } }
+    else { wakePause(); wakeStatus("Spento."); }
+  });
+  wakeWordEl.addEventListener("input", function(){ save("robot-wake-word", wakeWordEl.value.trim()); });
+  wakeUrlEl.addEventListener("change", function(){ save("robot-wake-url", wakeUrlEl.value.trim()); wake.model = null; wake.rec = null; wakePause(); });
+  if (wakeModeEl.value === "1") wakeStatus("Avvio…");
 
   // ================= Schermo intero e schermo acceso =================
   var wakeLock = null;

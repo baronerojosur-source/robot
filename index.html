@@ -1,0 +1,1396 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#000000">
+<title>Robot</title>
+<style>
+:root{
+  --face:#000000;
+  --panel:#eef4f3;
+  --panel-ink:#0f2421;
+  --panel-muted:#55706b;
+  --chip:#ffffff;
+  --chip-ink:#0f2421;
+  --chip-line:#cbdad7;
+  --chip-on:#0f2421;
+  --chip-on-ink:#ffffff;
+  --caption:rgba(255,255,255,.82);
+  color-scheme:light;
+  box-sizing:border-box;
+  padding-top:env(safe-area-inset-top,0px);
+  padding-bottom:env(safe-area-inset-bottom,0px);
+  background:var(--face);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --panel:#131d1c; --panel-ink:#e6f2f0; --panel-muted:#93aba6;
+    --chip:#1d2a28; --chip-ink:#e6f2f0; --chip-line:#2d3f3c;
+    --chip-on:#e6f2f0; --chip-on-ink:#0f2421;
+    color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --panel:#131d1c; --panel-ink:#e6f2f0; --panel-muted:#93aba6;
+  --chip:#1d2a28; --chip-ink:#e6f2f0; --chip-line:#2d3f3c;
+  --chip-on:#e6f2f0; --chip-on-ink:#0f2421;
+  color-scheme:dark;
+}
+*,*::before,*::after{box-sizing:inherit}
+html{height:100%;scroll-padding-top:env(safe-area-inset-top,0px)}
+body{
+  margin:0;height:100%;overflow:hidden;background:var(--face);
+  font-family:"Trebuchet MS",system-ui,sans-serif;
+  -webkit-tap-highlight-color:transparent;touch-action:manipulation;
+}
+canvas{display:block;width:100%;height:100%;user-select:none;-webkit-user-select:none}
+.caption{
+  position:fixed;left:50%;top:calc(12px + env(safe-area-inset-top,0px));
+  transform:translateX(-50%);width:min(92%, 900px);z-index:5;
+  text-align:center;color:#ffffff;font-size:20px;line-height:1.35;
+  background:#1d2a28;border:2px solid #3ff0dc;border-radius:14px;padding:8px 14px;
+  transition:opacity .6s ease;pointer-events:none;
+}
+.caption.gone{opacity:0}
+.caption{display:none}
+.panel{
+  position:fixed;z-index:10;left:50%;bottom:0;
+  width:min(640px, calc(100% - 16px));
+  max-height:calc(100% - 16px);overflow-y:auto;
+  transform:translate(-50%,105%);
+  transition:transform .28s cubic-bezier(.2,.8,.2,1);
+  background:var(--panel);color:var(--panel-ink);
+  border-radius:20px 20px 0 0;
+  padding:12px 16px calc(14px + env(safe-area-inset-bottom,0px));
+}
+.panel.open{transform:translate(-50%,0)}
+.panel h2{margin:6px 0 6px;font-size:15px;font-weight:700;color:var(--panel-muted)}
+.row{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px;align-items:center}
+.chip{
+  font:inherit;font-size:16px;min-height:44px;padding:6px 14px;border-radius:22px;
+  background:var(--chip);color:var(--chip-ink);border:1.5px solid var(--chip-line);cursor:pointer;
+}
+.chip[aria-pressed="true"]{background:var(--chip-on);color:var(--chip-on-ink);border-color:var(--chip-on)}
+.swatch{width:44px;height:44px;border-radius:50%;cursor:pointer;border:3px solid var(--chip-line)}
+.swatch[aria-pressed="true"]{border-color:var(--panel-ink)}
+.field{display:flex;flex-direction:column;gap:4px;margin-bottom:10px;font-size:15px}
+.field input,.field select,.row input{
+  font:inherit;font-size:16px;min-height:44px;padding:6px 12px;border-radius:12px;
+  border:1.5px solid var(--chip-line);background:var(--chip);color:var(--chip-ink);
+}
+.row input{flex:1 1 200px}
+.field textarea{font:inherit;font-size:15px;min-height:96px;padding:8px 12px;border-radius:12px;resize:vertical;
+  border:1.5px solid var(--chip-line);background:var(--chip);color:var(--chip-ink)}
+.note{font-size:14px;color:var(--panel-muted);margin:-4px 0 10px}
+.chip:focus-visible,.swatch:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:3px solid #3ff0dc;outline-offset:2px}
+@media (prefers-reduced-motion: reduce){.panel{transition:none}}
+</style>
+</head>
+<body>
+<canvas id="face" aria-label="Viso del robot"></canvas>
+<div class="caption" id="caption">Tocca una volta per parlare, due volte per il menu</div>
+
+<div class="panel" id="panel" role="dialog" aria-label="Impostazioni del robot">
+  <h2>Collegamento a Claude (versione 6.10)</h2>
+  <p class="note" id="lastLog">Ultimo messaggio: nessuno</p>
+  <label class="field">Chiave API
+    <input id="apiKey" type="password" autocomplete="off" placeholder="sk-ant-…">
+  </label>
+  <p class="note">La chiave resta salvata solo su questo telefono.</p>
+  <label class="field">Nome del robot
+    <input id="robotName" type="text" autocomplete="off" placeholder="Rojo">
+  </label>
+  <label class="field">Modello
+    <select id="model">
+      <option value="claude-haiku-5-5">Haiku 5.5: veloce ed economico</option>
+      <option value="claude-sonnet-5-5">Sonnet 5.5: più bravo, costa di più</option>
+    </select>
+  </label>
+  <label class="field">Vista
+    <select id="vision">
+      <option value="richiesta">Guarda solo quando glielo chiedi</option>
+      <option value="sempre">Guarda a ogni domanda</option>
+      <option value="spenta">Fotocamera spenta</option>
+    </select>
+  </label>
+  <p class="note">Esempi: “cosa vedi?”, “come sto?”, “leggi questo”, “di che colore è?”. Le foto non vengono salvate.</p>
+  <div class="row">
+    <button class="chip" id="lookBtn" type="button">Prova la vista</button>
+  </div>
+  <h2>Conversazione e memoria</h2>
+  <label class="field">Dopo la risposta
+    <select id="followup">
+      <option value="si">Resta in ascolto per continuare</option>
+      <option value="no">Torna in attesa</option>
+    </select>
+  </label>
+  <p class="note">Se resta in ascolto e non dici niente per qualche secondo, torna in attesa da solo.</p>
+  <label class="field">Memoria (una cosa per riga)
+    <textarea id="memoryText" placeholder="Es.: Dannier ha costruito Rojo"></textarea>
+  </label>
+  <p class="note">Rojo aggiunge da solo quello che gli chiedi di ricordare (“ricordati che…”) e toglie quello che gli chiedi di dimenticare.</p>
+  <div class="row">
+    <button class="chip" id="memSave" type="button">Salva memoria</button>
+    <button class="chip" id="memClear" type="button">Cancella memoria</button>
+  </div>
+  <h2>Parola chiave</h2>
+  <label class="field">Ascolto della parola chiave
+    <select id="wakeMode">
+      <option value="0">Spento</option>
+      <option value="1">Acceso</option>
+    </select>
+  </label>
+  <label class="field">Parola da dire
+    <input id="wakeWord" type="text" autocomplete="off" placeholder="uguale al nome del robot">
+  </label>
+  <label class="field">Distanza di ascolto
+    <select id="wakeSens">
+      <option value="1">Normale</option>
+      <option value="2">Lontano (amplifica di più, più tollerante)</option>
+      <option value="3">Solo il nome (ascolta solo “Rosso”, il più sensibile)</option>
+    </select>
+  </label>
+  <label class="field">Sicurezza minima sul nome (solo per “Solo il nome”)
+    <select id="wakeConf">
+      <option value="0.45">Bassa: risponde più facilmente</option>
+      <option value="0.6">Media</option>
+      <option value="0.75">Alta: meno falsi allarmi</option>
+    </select>
+  </label>
+  <p class="note">Chiamalo con il nome da solo, poi una pausa (“Rosso!”), oppure “Ehi Rosso”. Se il nome compare in mezzo a una frase (“il vino rosso”) non risponde.</p>
+  <p class="note" id="wakeStatus">Spento.</p>
+  <p class="note" id="wakeHeard">Ultime parole sentite: nessuna.</p>
+  <p class="note" id="wakeDiag">Diagnosi: in attesa.</p>
+  <p class="note">L’ascolto avviene solo sul telefono, niente va in rete finché non sente il nome. La prima volta scarica il modello vocale (circa 35 MB, italiano o spagnolo secondo la parola): usa il Wi-Fi.</p>
+  <label class="field">Indirizzo del modello vocale (vuoto = automatico)
+    <input id="wakeUrl" type="text" autocomplete="off" placeholder="automatico">
+  </label>
+  <h2>Telegram e sentinella</h2>
+  <label class="field">Token del bot Telegram
+    <input id="tgToken" type="password" autocomplete="off" placeholder="123456789:AA…">
+  </label>
+  <p class="note" id="tgStatus">Telegram non collegato.</p>
+  <div class="row">
+    <button class="chip" id="tgConnect" type="button">Collega Telegram</button>
+    <button class="chip" id="tgDisconnect" type="button">Scollega</button>
+  </div>
+  <label class="field">Sensibilità della sentinella
+    <select id="sens">
+      <option value="bassa">Bassa: solo movimenti grandi</option>
+      <option value="media">Media</option>
+      <option value="alta">Alta: anche piccoli movimenti</option>
+    </select>
+  </label>
+  <div class="row">
+    <button class="chip" id="sentBtn" type="button">Attiva sentinella</button>
+  </div>
+  <div class="row">
+    <input id="typed" type="text" autocomplete="off" placeholder="Scrivi qui per provare senza voce">
+    <button class="chip" id="sendBtn" type="button">Invia</button>
+  </div>
+
+  <h2>Umore</h2>
+  <div class="row" id="moods"></div>
+  <h2>Colore degli occhi</h2>
+  <div class="row" id="colors"></div>
+  <div class="row">
+    <button class="chip" id="fsBtn" type="button">Schermo intero</button>
+    <button class="chip" id="resetBtn" type="button">Nuova conversazione</button>
+    <button class="chip" id="closeBtn" type="button">Chiudi menu</button>
+  </div>
+</div>
+
+<script>
+window.addEventListener("error", function(e){
+  var c = document.getElementById("caption");
+  if (c){ c.textContent = "Errore nella pagina: " + e.message; c.classList.remove("gone"); }
+  var l = document.getElementById("lastLog");
+  if (l) l.textContent = "Errore nella pagina: " + e.message;
+});
+(function(){
+  "use strict";
+  // ================= Viso =================
+  var cv = document.getElementById("face");
+  var ctx = cv.getContext("2d");
+  var W = 0, H = 0, dpr = 1;
+  function resize(){
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    var r = cv.getBoundingClientRect();
+    W = r.width; H = r.height;
+    cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+  window.addEventListener("resize", resize);
+  resize();
+
+  var KEYS = ["lidTop","tilt","lidBot","sw","sh","rad","dy"];
+  function eye(o){
+    var e = {lidTop:0, tilt:0, lidBot:0, sw:1, sh:1, rad:0.32, dy:0};
+    if (o) for (var k in o) e[k] = o[k];
+    return e;
+  }
+  function pair(o){ return [eye(o), eye(o)]; }
+
+  var MOODS = {
+    neutro:     { label:"Neutro",     make:function(){ return pair(); } },
+    felice:     { label:"Felice",     make:function(){ return pair({lidBot:0.5, sh:0.95}); } },
+    triste:     { label:"Triste",     make:function(){ return pair({lidTop:0.32, tilt:-0.9, sh:0.92, dy:0.25}); } },
+    arrabbiato: { label:"Arrabbiato", make:function(){ return pair({lidTop:0.3, tilt:1, sh:0.9}); } },
+    sorpreso:   { label:"Sorpreso",   make:function(){ return pair({sw:1.1, sh:1.15, rad:0.5}); } },
+    assonnato:  { label:"Assonnato",  make:function(){ return pair({lidTop:0.55, lidBot:0.08, dy:0.2}); } },
+    dubbioso:   { label:"Dubbioso",   make:function(){ return [eye({lidTop:0.38, tilt:0.3}), eye({sh:1.08})]; } },
+    // espressioni usate solo dalla conversazione
+    attento:    { hidden:true, make:function(){ return pair({sw:1.05, sh:1.12, rad:0.42}); } },
+    pensa:      { hidden:true, make:function(){ return pair({lidTop:0.18, sh:0.95}); } }
+  };
+  var COLORS = [
+    {name:"Turchese", hex:"#3ff0dc"},
+    {name:"Ambra",    hex:"#ffb547"},
+    {name:"Rosa",     hex:"#ff7fb8"},
+    {name:"Bianco",   hex:"#eef3ff"}
+  ];
+
+  function load(k, d){ try { var v = localStorage.getItem(k); return v === null ? d : v; } catch(e){ return d; } }
+  function save(k, v){ try { localStorage.setItem(k, v); } catch(e){} }
+
+  var mood = "neutro";
+  var tempMood = null, tempUntil = 0;
+  var state = "idle";            // idle | listening | thinking | speaking
+  var speakMood = "neutro";
+  var cur = MOODS.neutro.make();
+  var look = {x:0, y:0}, lookT = {x:0, y:0};
+  var holdLookUntil = 0, nextLookAt = 0;
+  var blink = {active:false, t:0, dur:0.18, next:0, again:false};
+  var talkPulse = 0;
+  var color = load("robot-eye-color", COLORS[0].hex);
+
+  function hexToRgb(h){ h = h.replace("#",""); return [parseInt(h.substr(0,2),16), parseInt(h.substr(2,2),16), parseInt(h.substr(4,2),16)]; }
+  function shade(h, f){ var c = hexToRgb(h); return "rgb(" + Math.round(c[0]*f) + "," + Math.round(c[1]*f) + "," + Math.round(c[2]*f) + ")"; }
+
+  function activeMood(now){
+    if (tempMood && now < tempUntil) return tempMood;
+    tempMood = null;
+    if (state === "listening") return "attento";
+    if (state === "thinking") return "pensa";
+    if (state === "speaking") return speakMood;
+    if (sentinel.on) return "assonnato";
+    return mood;
+  }
+
+  function roundRect(x, y, w, h, r){
+    r = Math.max(0, Math.min(r, w/2, h/2));
+    ctx.beginPath();
+    ctx.moveTo(x+r, y); ctx.lineTo(x+w-r, y); ctx.quadraticCurveTo(x+w, y, x+w, y+r);
+    ctx.lineTo(x+w, y+h-r); ctx.quadraticCurveTo(x+w, y+h, x+w-r, y+h);
+    ctx.lineTo(x+r, y+h); ctx.quadraticCurveTo(x, y+h, x, y+h-r);
+    ctx.lineTo(x, y+r); ctx.quadraticCurveTo(x, y, x+r, y);
+    ctx.closePath();
+  }
+
+  function drawEye(i, e, blinkAmt, breath){
+    var base = Math.min(W * 0.2, H * 0.48);
+    var side = (i === 0) ? -1 : 1;
+    var lean = 1 + look.x * 0.07 * side;
+    var w = base * e.sw * lean;
+    var h = base * 1.15 * e.sh * lean * breath * (1 - blinkAmt * 0.92);
+    var cx = W/2 + side * base * 0.85 + look.x * W * 0.09;
+    var cy = H/2 + e.dy * base * 0.4 + look.y * H * 0.12;
+    var top = cy - h/2, bottom = cy + h/2;
+    var pad = base * 0.25;
+    var L = cx - w/2 - pad, R = cx + w/2 + pad;
+    var topShift = pad * Math.max(0, 1 - e.lidTop * 5);
+    var yInner = top + h * (e.lidTop + e.tilt * 0.22) - topShift;
+    var yOuter = top + h * (e.lidTop - e.tilt * 0.22) - topShift;
+    var yL = (i === 0) ? yOuter : yInner;
+    var yR = (i === 0) ? yInner : yOuter;
+    var botEdge = bottom + pad * Math.max(0, 1 - e.lidBot * 5);
+    var ctrlY = bottom + pad - 2.2 * h * e.lidBot;
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(L, yL); ctx.lineTo(R, yR); ctx.lineTo(R, botEdge);
+    ctx.quadraticCurveTo(cx, ctrlY, L, botEdge);
+    ctx.closePath(); ctx.clip();
+    var g = ctx.createLinearGradient(0, top, 0, bottom);
+    g.addColorStop(0, color); g.addColorStop(1, shade(color, 0.72));
+    ctx.fillStyle = g; ctx.shadowColor = color; ctx.shadowBlur = base * 0.18;
+    roundRect(cx - w/2, top, w, h, Math.min(w, h) * e.rad);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  var sentinel = {on:false, stream:null, video:null, timer:null, prev:null, hits:0, lastAlert:0, alerts:[], small:null, armedAt:0, cx:0.5, lastEvent:0};
+  // ---------- Sottotitoli disegnati sul viso ----------
+  var cap = {text:"", until:0, alpha:0};
+  function wrapLines(text, maxW){
+    var words = text.split(/\s+/), lines = [], line = "";
+    for (var i = 0; i < words.length; i++){
+      var test = line ? line + " " + words[i] : words[i];
+      if (ctx.measureText(test).width > maxW && line){ lines.push(line); line = words[i]; }
+      else line = test;
+    }
+    if (line) lines.push(line);
+    return lines;
+  }
+  function drawCaption(now, dt){
+    var target = (cap.text && now < cap.until) ? 1 : 0;
+    cap.alpha += (target - cap.alpha) * (1 - Math.exp(-dt * 8));
+    if (cap.alpha < 0.02 || !cap.text) return;
+    var fs = Math.max(16, Math.min(24, W * 0.035));
+    ctx.font = fs + "px 'Trebuchet MS', sans-serif";
+    var maxW = Math.min(W * 0.88, 860);
+    var lines = wrapLines(cap.text, maxW - 28);
+    if (lines.length > 4){ lines = lines.slice(0, 4); lines[3] = lines[3].replace(/\s*\S*$/, "") + "…"; }
+    var lh = fs * 1.3, bw = 0;
+    for (var i = 0; i < lines.length; i++) bw = Math.max(bw, ctx.measureText(lines[i]).width);
+    bw += 28;
+    var bh = lines.length * lh + 16;
+    var bx = (W - bw) / 2, by = 12;
+    ctx.save();
+    ctx.globalAlpha = cap.alpha;
+    ctx.fillStyle = "#1d2a28";
+    roundRect(bx, by, bw, bh, 12); ctx.fill();
+    ctx.lineWidth = 2; ctx.strokeStyle = color; ctx.stroke();
+    ctx.fillStyle = "#ffffff"; ctx.textAlign = "center"; ctx.textBaseline = "top";
+    for (var j = 0; j < lines.length; j++) ctx.fillText(lines[j], W / 2, by + 8 + j * lh + (lh - fs) / 2);
+    ctx.restore();
+  }
+
+  var last = performance.now();
+  function frame(now){
+    var dt = Math.min(0.05, (now - last) / 1000);
+    last = now;
+    var t = now / 1000;
+    var am = activeMood(now);
+    var target = MOODS[am].make();
+    var k = 1 - Math.exp(-dt * 9);
+    for (var i = 0; i < 2; i++) for (var j = 0; j < KEYS.length; j++){
+      var key = KEYS[j];
+      cur[i][key] += (target[i][key] - cur[i][key]) * k;
+    }
+
+    if (state === "thinking"){
+      lookT.x = Math.sin(t * 1.3) * 0.6; lookT.y = -0.55;
+    } else if (state === "listening" || state === "speaking"){
+      if (now > holdLookUntil){ lookT.x = 0; lookT.y = 0; }
+    } else if (now > holdLookUntil && now > nextLookAt){
+      if (Math.random() < 0.4){ lookT.x = 0; lookT.y = 0; }
+      else { lookT.x = Math.random()*2 - 1; lookT.y = Math.random()*1.2 - 0.6; }
+      nextLookAt = now + 1500 + Math.random()*2500;
+    }
+    var kl = 1 - Math.exp(-dt * 12);
+    look.x += (lookT.x - look.x) * kl;
+    look.y += (lookT.y - look.y) * kl;
+
+    var sleepy = am === "assonnato";
+    if (!blink.active && now > blink.next){
+      blink.active = true; blink.t = 0;
+      blink.dur = sleepy ? 0.45 : 0.18;
+      blink.again = !sleepy && Math.random() < 0.18;
+    }
+    var blinkAmt = 0;
+    if (blink.active){
+      blink.t += dt / blink.dur;
+      if (blink.t >= 1){
+        blink.active = false;
+        if (blink.again){ blink.again = false; blink.next = now + 120; }
+        else blink.next = now + (sleepy ? 3500 : 2000) + Math.random()*4000;
+      } else blinkAmt = Math.sin(Math.PI * blink.t);
+    }
+
+    var breath = 1 + Math.sin(t * 1.6) * 0.015;
+    if (state === "speaking"){
+      talkPulse = Math.max(talkPulse - dt * 4, 0);
+      breath *= 1 + Math.abs(Math.sin(t * 9)) * 0.035 + talkPulse * 0.05;
+    }
+    if (state === "listening") breath *= 1 + Math.sin(t * 4) * 0.02;
+
+    ctx.fillStyle = "#000"; ctx.fillRect(0, 0, W, H);
+    drawEye(0, cur[0], blinkAmt, breath);
+    drawEye(1, cur[1], blinkAmt, breath);
+    if (sentinel.on){
+      ctx.fillStyle = "rgba(0,0,0,0.55)"; ctx.fillRect(0, 0, W, H);
+      ctx.fillStyle = "#ff5a4f"; ctx.beginPath(); ctx.arc(18, H - 18, 5, 0, Math.PI * 2); ctx.fill();
+      ctx.font = "14px 'Trebuchet MS', sans-serif"; ctx.fillStyle = "rgba(255,255,255,0.75)";
+      ctx.textAlign = "left"; ctx.textBaseline = "middle"; ctx.fillText("Sentinella attiva", 30, H - 18);
+    }
+    drawCaption(now, dt);
+    requestAnimationFrame(frame);
+  }
+  blink.next = performance.now() + 1200;
+  requestAnimationFrame(frame);
+
+  // ================= Didascalie =================
+  var capEl = document.getElementById("caption");
+  var capTimer = null;
+  var logEl = document.getElementById("lastLog");
+  function caption(text, ms){
+    var d = new Date();
+    logEl.textContent = "Ultimo messaggio (" + d.toLocaleTimeString("it-IT") + "): " + text;
+    cap.text = text;
+    cap.until = (ms === 0) ? Infinity : performance.now() + (ms || 5000);
+  }
+  caption("Tocca una volta per parlare, due volte per il menu", 6000);
+
+  // ================= Claude =================
+  var history = [];
+  try { history = JSON.parse(load("robot-history", "[]")) || []; } catch(e){ history = []; }
+  while (history.length && history[0].role !== "user") history.shift();
+  var keyEl = document.getElementById("apiKey");
+  var nameEl = document.getElementById("robotName");
+  var modelEl = document.getElementById("model");
+  keyEl.value = load("robot-api-key", "");
+  nameEl.value = load("robot-name", "");
+  modelEl.value = load("robot-model", "claude-haiku-5-5");
+  keyEl.addEventListener("input", function(){ save("robot-api-key", keyEl.value.trim()); });
+  nameEl.addEventListener("input", function(){ save("robot-name", nameEl.value.trim()); });
+  modelEl.addEventListener("change", function(){ save("robot-model", modelEl.value); });
+  var visionEl = document.getElementById("vision");
+  visionEl.value = load("robot-vision", "richiesta");
+  visionEl.addEventListener("change", function(){ save("robot-vision", visionEl.value); });
+  var VISION_RE = /(vedi|vedere|guarda|guardami|come sto|cosa ho|cosa tengo|cos.?è quest|che cos.?è|leggi|leggere|che colore|chi sono|ti mostro|ti faccio vedere|indovina)/i;
+
+  function takePhoto(){
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return Promise.reject(new Error("fotocamera non disponibile su questo browser"));
+    return navigator.mediaDevices.getUserMedia({video:{facingMode:"user", width:{ideal:1280}, height:{ideal:720}}, audio:false}).then(function(stream){
+      var stop = function(){ stream.getTracks().forEach(function(t){ t.stop(); }); };
+      var v = document.createElement("video");
+      v.muted = true; v.playsInline = true; v.setAttribute("playsinline", ""); v.srcObject = stream;
+      return v.play().then(function(){
+        return new Promise(function(res){ setTimeout(res, 700); });
+      }).then(function(){
+        var vw = v.videoWidth || 1280, vh = v.videoHeight || 720;
+        var w = 768, h = Math.round(w * vh / vw);
+        var c = document.createElement("canvas"); c.width = w; c.height = h;
+        c.getContext("2d").drawImage(v, 0, 0, w, h);
+        stop();
+        return c.toDataURL("image/jpeg", 0.8).split(",")[1];
+      }, function(e){ stop(); throw e; });
+    });
+  }
+
+  function systemPrompt(){
+    var name = nameEl.value.trim() || "Rojo";
+    return "Sei " + name + ", un piccolo robot da scrivania. Il tuo viso è lo schermo di un vecchio smartphone Xperia, " +
+      "con due occhi animati; presto avrai anche un collo motorizzato. Parli in italiano con la persona che ti ha costruito, " +
+      "con un carattere curioso, simpatico e un po’ giocoso. Le tue risposte vengono lette ad alta voce da una sintesi vocale: " +
+      "rispondi in una, due o al massimo tre frasi brevi, senza elenchi, markdown, emoji o simboli. " +
+      "Inizia sempre la risposta con un’etichetta di umore tra parentesi quadre, scelta tra: " +
+      "[neutro], [felice], [triste], [arrabbiato], [sorpreso], [assonnato], [dubbioso]. " +
+      "Esempio: [felice] Ciao! Che bello sentirti. " +
+      "A volte riceverai una foto: è quello che vedi in questo momento con la tua fotocamera, sopra gli occhi. " +
+      "Parlane in prima persona e con naturalezza, come se stessi guardando, senza dire che è una foto. " +
+      "Se non ricevi una foto non puoi vedere nulla: se te lo chiedono, dillo con simpatia. " +
+      "Ti chiamano dicendo il tuo nome; parla con chiunque in casa, non solo con chi ti ha costruito. " +
+      "Adesso sono le " + hhmm() + " di " + new Date().toLocaleDateString("it-IT", {weekday:"long", day:"numeric", month:"long"}) + ": usalo per salutare in modo adatto, senza ripeterlo sempre. " +
+      memoryPrompt() +
+      "Se ti chiedono di ricordare qualcosa, o scopri un’informazione stabile e utile su chi vive in casa (nomi, gusti, abitudini), " +
+      "aggiungi alla fine della risposta un’etichetta [ricorda: frase breve in terza persona]. " +
+      "Se ti chiedono di dimenticare qualcosa, aggiungi alla fine [dimentica: parola chiave]. Queste etichette non vengono lette ad alta voce.";
+  }
+  // ================= Memoria =================
+  var memEl = document.getElementById("memoryText");
+  function memLines(){ return load("robot-memory", "").split("\n").map(function(l){ return l.trim(); }).filter(Boolean); }
+  function memSet(lines){ while (lines.length > 40) lines.shift(); save("robot-memory", lines.join("\n")); memEl.value = lines.join("\n"); }
+  memEl.value = memLines().join("\n");
+  function memoryPrompt(){
+    var l = memLines();
+    if (!l.length) return "";
+    return "Cose che ricordi di chi vive in casa: " + l.join("; ") + ". ";
+  }
+  // toglie le etichette [ricorda: …] e [dimentica: …], le applica e restituisce il testo pulito
+  function applyMemoryTags(txt){
+    var changed = false, lines = memLines();
+    txt = txt.replace(/\[\s*ricorda\s*:\s*([^\]]+)\]/gi, function(_, f){
+      f = f.trim(); if (f && lines.map(function(x){ return x.toLowerCase(); }).indexOf(f.toLowerCase()) < 0){ lines.push(f); changed = true; }
+      return "";
+    });
+    txt = txt.replace(/\[\s*dimentica\s*:\s*([^\]]+)\]/gi, function(_, k){
+      k = k.trim().toLowerCase(); var n = lines.length;
+      if (k) lines = lines.filter(function(x){ return x.toLowerCase().indexOf(k) < 0; });
+      if (lines.length !== n) changed = true;
+      return "";
+    });
+    if (changed) memSet(lines);
+    return txt.trim();
+  }
+  document.getElementById("memSave").addEventListener("click", function(){
+    memSet(memEl.value.split("\n").map(function(l){ return l.trim(); }).filter(Boolean));
+    caption("Memoria salvata.", 3000);
+  });
+  document.getElementById("memClear").addEventListener("click", function(){
+    if (!confirm("Cancello tutto quello che Rojo ricorda?")) return;
+    memSet([]); caption("Memoria cancellata.", 3000); window.robot.react("sorpreso", 1200);
+  });
+  var followEl = document.getElementById("followup");
+  followEl.value = load("robot-followup", "si");
+  followEl.addEventListener("change", function(){ save("robot-followup", followEl.value); });
+  function saveHistory(){ try { save("robot-history", JSON.stringify(history.slice(-14))); } catch(e){} }
+
+  function apiError(status, data){
+    var msg = data && data.error && data.error.message ? data.error.message : "";
+    if (status === 401) return "La chiave API non è valida: controllala nel menu.";
+    if (status === 429) return "Troppe richieste o credito esaurito. " + msg;
+    if (status === 400 && /credit/i.test(msg)) return "Credito API esaurito: ricaricalo nella console Anthropic.";
+    return "Errore " + status + (msg ? ": " + msg : "");
+  }
+
+  function ask(text, forceVision, fromVoice){
+    var key = keyEl.value.trim();
+    if (!key){ caption("Inserisci la chiave API nel menu (doppio tocco).", 6000); window.robot.react("dubbioso", 2500); setState("idle"); return; }
+    setState("thinking");
+    caption("Tu: " + text + " (invio a Claude…)", 0);
+    history.push({role:"user", content:text});
+    while (history.length > 14) history.shift();
+    while (history.length && history[0].role !== "user") history.shift();
+    var mode = visionEl.value;
+    var wantPhoto = mode !== "spenta" && (mode === "sempre" || forceVision || VISION_RE.test(text));
+    var pre = Promise.resolve(null);
+    if (wantPhoto){
+      caption("Ti guardo…", 0);
+      window.robot.lookAt(0, 0, 2500);
+      pre = grabFrame().catch(function(e){
+        caption("Non riesco a usare la fotocamera: " + (e && e.message ? e.message : e), 6000);
+        return null;
+      });
+    }
+
+    var ctrl = ("AbortController" in window) ? new AbortController() : null;
+    var timeout = setTimeout(function(){ if (ctrl) ctrl.abort(); }, 35000);
+    pre.then(function(img){
+    var msgs = history.slice();
+    if (img){
+      msgs[msgs.length-1] = {role:"user", content:[
+        {type:"image", source:{type:"base64", media_type:"image/jpeg", data:img}},
+        {type:"text", text:text}
+      ]};
+      history[history.length-1] = {role:"user", content: text + " (in quel momento ti ho mostrato una foto)"};
+      caption("Tu: " + text + " (invio a Claude con la foto…)", 0);
+    }
+    return fetch("https://api.anthropic.com/v1/messages", {
+      method:"POST",
+      signal: ctrl ? ctrl.signal : undefined,
+      headers:{
+        "content-type":"application/json",
+        "x-api-key":key,
+        "anthropic-version":"2023-06-01",
+        "anthropic-dangerous-direct-browser-access":"true"
+      },
+      body: JSON.stringify({
+        model: modelEl.value,
+        max_tokens: 400,
+        stream: true,
+        system: systemPrompt(),
+        messages: msgs
+      })
+    }); }).then(function(r){
+      if (!r.ok){
+        clearTimeout(timeout);
+        return r.json().catch(function(){ return null; }).then(function(d){ throw new Error(apiError(r.status, d)); });
+      }
+      return streamAnswer(r, !!fromVoice).then(function(full){ clearTimeout(timeout); return full; });
+    }).then(function(full){
+      history.push({role:"assistant", content:full});
+      saveHistory();
+    }).catch(function(err){
+      clearTimeout(timeout);
+      if (state === "speaking" && talk.text){ talk.ended = true; talkCheck(); }
+      if (err && err.name === "AbortError") err = new Error("Claude non ha risposto entro 35 secondi: controlla la connessione.");
+      if (history.length && history[history.length-1].role === "user") history.pop();
+      if (state !== "speaking") setState("idle");
+      var msg = err && err.message ? err.message : "Errore sconosciuto";
+      if (/Failed to fetch|NetworkError/i.test(msg)) msg = "Non riesco a raggiungere Claude (" + msg + "). Controlla il Wi-Fi.";
+      caption(msg, 8000);
+      window.robot.react("triste", 2500);
+    });
+  }
+
+  // ================= Voce =================
+  var voices = [];
+  function loadVoices(){ if ("speechSynthesis" in window) voices = speechSynthesis.getVoices(); }
+  loadVoices();
+  if ("speechSynthesis" in window) speechSynthesis.onvoiceschanged = loadVoices;
+  function italianVoice(){
+    for (var i = 0; i < voices.length; i++) if (/^it/i.test(voices[i].lang)) return voices[i];
+    return null;
+  }
+  var primed = false;
+  function primeSpeech(){
+    if (primed || !("speechSynthesis" in window)) return;
+    primed = true;
+    try { var u = new SpeechSynthesisUtterance(" "); u.volume = 0; speechSynthesis.speak(u); } catch(e){}
+  }
+
+  // la risposta viene detta a frasi, mentre arriva: la prima frase parte subito
+  var speakGuard = null;
+  var talk = {gen:0, pending:0, ended:true, text:"", followup:false, queued:0};
+  function talkBegin(md, followup){
+    talk.gen++; talk.pending = 0; talk.ended = false; talk.text = ""; talk.followup = !!followup; talk.queued = 0;
+    speakMood = md || "neutro";
+    setState("speaking");
+    if ("speechSynthesis" in window) speechSynthesis.cancel();
+  }
+  function talkGuard(){
+    clearTimeout(speakGuard);
+    speakGuard = setTimeout(function(){ talk.ended = true; talk.pending = 0; talkCheck(); }, 6000 + talk.queued * 110);
+  }
+  function talkChunk(t){
+    t = t.replace(/\[[^\]]*\]/g, "").replace(/[*_#`]/g, "").trim();
+    if (!t) return;
+    talk.text += (talk.text ? " " : "") + t;
+    talk.queued += t.length;
+    caption(talk.text, 0);
+    talkGuard();
+    if (!("speechSynthesis" in window)) return;
+    var g = talk.gen;
+    var u = new SpeechSynthesisUtterance(t);
+    u.lang = "it-IT";
+    var v = italianVoice(); if (v) u.voice = v;
+    u.rate = 1.05; u.pitch = 1.15;
+    u.onboundary = function(){ talkPulse = 1; };
+    u.onend = u.onerror = function(){ if (g !== talk.gen) return; talk.pending--; talk.queued = Math.max(0, talk.queued - t.length); talkCheck(); };
+    talk.pending++;
+    speechSynthesis.speak(u);
+  }
+  function talkEnd(){ talk.ended = true; talkGuard(); talkCheck(); }
+  function talkCheck(){
+    if (!talk.ended || talk.pending > 0) return;
+    clearTimeout(speakGuard);
+    if (state !== "speaking") return;
+    setState("idle");
+    window.robot.react(speakMood, 2500);
+    caption(talk.text, 4000);
+    afterSpeech();
+  }
+  function talkStop(){ talk.gen++; talk.followup = false; clearTimeout(speakGuard); if ("speechSynthesis" in window) speechSynthesis.cancel(); }
+  function speak(text, md){ talkBegin(md, false); talkChunk(text); talkEnd(); }
+
+  // legge la risposta in streaming: umore, frasi complete, etichette di memoria alla fine
+  function streamAnswer(r, fromVoice){
+    var all = "", spoken = 0, moodDone = false, stopSpeak = false;
+    function pump(final){
+      var body = all;
+      if (!moodDone){
+        var m = body.match(/^\s*\[([a-zàèéìòù]+)\]\s*/i);
+        if (!m && !final && body.length < 24 && body.indexOf("]") < 0) return;
+        var md = m ? m[1].toLowerCase() : "neutro";
+        talkBegin((MOODS[md] && !MOODS[md].hidden) ? md : "neutro", fromVoice);
+        spoken = m ? m[0].length : 0;
+        moodDone = true;
+      }
+      if (stopSpeak) return;
+      var rest = body.slice(spoken);
+      var re = /[^.!?…]*[.!?…]+["”»)]*\s+/g, mm, last = 0;
+      while ((mm = re.exec(rest))){
+        var sent = mm[0];
+        if (/\[\s*(ricorda|dimentica)/i.test(sent)){ var cut = sent.search(/\[\s*(ricorda|dimentica)/i); talkChunk(sent.slice(0, cut)); stopSpeak = true; spoken += last + sent.length; return; }
+        talkChunk(sent);
+        last = re.lastIndex;
+      }
+      spoken += last;
+      if (final){
+        var tail = body.slice(spoken), c2 = tail.search(/\[\s*(ricorda|dimentica)/i);
+        talkChunk(c2 >= 0 ? tail.slice(0, c2) : tail);
+        spoken = body.length;
+      }
+    }
+    function finish(){
+      pump(true);
+      var hadMem = /\[\s*(ricorda|dimentica)/i.test(all);
+      applyMemoryTags(all);
+      if (hadMem) talk.text += " (memoria aggiornata)";
+      talkEnd();
+      return all.trim();
+    }
+    if (!r.body || !r.body.getReader){
+      return r.text().then(function(t){
+        t.split("\n").forEach(function(line){ all += sseText(line); });
+        return finish();
+      });
+    }
+    var reader = r.body.getReader(), dec = new TextDecoder(), buf = "";
+    function step(){
+      return reader.read().then(function(res){
+        if (res.done) return finish();
+        buf += dec.decode(res.value, {stream:true});
+        var lines = buf.split("\n"); buf = lines.pop();
+        lines.forEach(function(line){ all += sseText(line); });
+        pump(false);
+        return step();
+      });
+    }
+    return step();
+  }
+  function sseText(line){
+    if (line.indexOf("data:") !== 0) return "";
+    var d = null;
+    try { d = JSON.parse(line.slice(5)); } catch(e){ return ""; }
+    if (d && d.type === "content_block_delta" && d.delta && d.delta.type === "text_delta") return d.delta.text;
+    if (d && d.type === "error") throw new Error("Claude si è interrotto: " + (d.error && d.error.message ? d.error.message : "errore sconosciuto"));
+    return "";
+  }
+
+  // dopo la risposta: se la conversazione era a voce, resta in ascolto per un po'
+  function afterSpeech(){
+    wake.holdUntil = performance.now() + 1500;
+    if (talk.followup && followEl.value === "si" && !sentinel.on){
+      setTimeout(function(){ if (state === "idle") startListening(true); }, 350);
+    }
+  }
+
+  var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  var rec = null;
+  function micError(code){
+    if (code === "not-allowed" || code === "service-not-allowed") return "Microfono bloccato: consenti l’accesso al microfono per questa pagina.";
+    if (code === "no-speech") return "Non ho sentito nulla. Tocca e riprova.";
+    if (code === "network") return "Il riconoscimento vocale ha bisogno di internet.";
+    if (code === "audio-capture") return "Non trovo il microfono.";
+    return "Errore del microfono: " + code;
+  }
+  function startListening(followup){
+    wakePause();
+    if (!keyEl.value.trim()){ caption("Inserisci la chiave API nel menu (doppio tocco).", 6000); window.robot.react("dubbioso", 2500); return; }
+    if (!SR){ caption("Riconoscimento vocale non disponibile: usa il campo di testo nel menu.", 7000); return; }
+    var got = false;
+    rec = new SR();
+    rec.lang = "it-IT"; rec.interimResults = false; rec.maxAlternatives = 1;
+    rec.onresult = function(e){ got = true; ask(e.results[0][0].transcript, false, true); };
+    rec.onerror = function(e){
+      if (state === "listening") setState("idle");
+      if (followup && (e.error === "no-speech" || e.error === "aborted")){ caption("…", 1200); return; }
+      caption(micError(e.error), 6000);
+    };
+    var guard = setTimeout(function(){ if (state === "listening") stopListening(); }, followup ? 7000 : 12000);
+    rec.onend = function(){
+      clearTimeout(guard);
+      wake.holdUntil = performance.now() + 800;
+      if (!got && state === "listening"){ setState("idle"); caption(followup ? "…" : "Non ho sentito nulla. Tocca e riprova.", followup ? 1200 : 3000); }
+    };
+    setState("listening");
+    caption(followup ? "Ti ascolto ancora…" : "Ti ascolto…", 0);
+    try { rec.start(); } catch(e){ setState("idle"); caption("Il microfono non è partito: riprova.", 5000); }
+  }
+  function stopListening(){ try { if (rec) rec.stop(); } catch(e){} }
+
+  function setState(s){ state = s; }
+
+  // ================= API interna (per i servo, più avanti) =================
+  window.robot = {
+    setMood: function(name){ if (MOODS[name] && !MOODS[name].hidden){ mood = name; tempMood = null; syncMoodButtons(); } },
+    react: function(name, ms){ if (MOODS[name]){ tempMood = name; tempUntil = performance.now() + (ms || 1500); } },
+    lookAt: function(x, y, ms){ lookT.x = x; lookT.y = y; holdLookUntil = performance.now() + (ms || 2000); },
+    blink: function(){ blink.next = 0; },
+    say: function(text){ ask(text); },
+    get state(){ return state; }
+  };
+
+  // ================= Tocco =================
+  var panel = document.getElementById("panel");
+  var lastTap = 0, tapTimer = null;
+  cv.addEventListener("pointerdown", function(){
+    primeSpeech();
+    if (panel.classList.contains("open")){ closePanel(); return; }
+    var now = performance.now();
+    if (now - lastTap < 350){ clearTimeout(tapTimer); lastTap = 0; openPanel(); return; }
+    lastTap = now;
+    tapTimer = setTimeout(singleTap, 360);
+  });
+  function singleTap(){
+    if (sentinel.on && state === "idle"){ caption("Sentinella attiva: disattivala dal menu o da Telegram.", 4000); return; }
+    if (state === "listening") stopListening();
+    else if (state === "speaking"){ talkStop(); setState("idle"); }
+    else if (state === "idle") startListening();
+  }
+
+  // ================= Menu =================
+  var moodsEl = document.getElementById("moods");
+  var colorsEl = document.getElementById("colors");
+  Object.keys(MOODS).forEach(function(name){
+    if (MOODS[name].hidden) return;
+    var b = document.createElement("button");
+    b.type = "button"; b.className = "chip"; b.textContent = MOODS[name].label; b.dataset.mood = name;
+    b.addEventListener("click", function(){ window.robot.setMood(name); });
+    moodsEl.appendChild(b);
+  });
+  function syncMoodButtons(){
+    var bs = moodsEl.querySelectorAll("button");
+    for (var i = 0; i < bs.length; i++) bs[i].setAttribute("aria-pressed", bs[i].dataset.mood === mood ? "true" : "false");
+  }
+  syncMoodButtons();
+  COLORS.forEach(function(c){
+    var b = document.createElement("button");
+    b.type = "button"; b.className = "swatch"; b.style.background = c.hex;
+    b.setAttribute("aria-label", c.name); b.dataset.hex = c.hex;
+    b.addEventListener("click", function(){ setColor(c.hex); });
+    colorsEl.appendChild(b);
+  });
+  function setColor(hex){
+    color = hex; save("robot-eye-color", hex);
+    var bs = colorsEl.querySelectorAll("button");
+    for (var i = 0; i < bs.length; i++) bs[i].setAttribute("aria-pressed", bs[i].dataset.hex === hex ? "true" : "false");
+  }
+  setColor(color);
+
+  function openPanel(){ panel.classList.add("open"); }
+  function closePanel(){ panel.classList.remove("open"); if (document.activeElement) document.activeElement.blur(); }
+  document.getElementById("closeBtn").addEventListener("click", closePanel);
+  document.getElementById("resetBtn").addEventListener("click", function(){
+    history = []; saveHistory(); closePanel(); caption("Conversazione ricominciata.", 3000); window.robot.react("sorpreso", 1200);
+  });
+
+  var typedEl = document.getElementById("typed");
+  function sendTyped(){
+    var t = typedEl.value.trim();
+    if (!t){ caption("Scrivi prima un messaggio nel campo di testo.", 4000); return; }
+    if (state !== "idle"){ talkStop(); if (state === "listening") stopListening(); setState("idle"); }
+    primeSpeech();
+    typedEl.value = "";
+    closePanel();
+    ask(t);
+  }
+  document.getElementById("sendBtn").addEventListener("click", sendTyped);
+  document.getElementById("lookBtn").addEventListener("click", function(){
+    if (state !== "idle") return;
+    primeSpeech(); closePanel();
+    ask("Cosa vedi in questo momento?", true);
+  });
+  typedEl.addEventListener("keydown", function(e){ if (e.key === "Enter") sendTyped(); });
+
+
+  // ================= Claude (chiamata diretta) =================
+  function claudeRaw(msgs, maxTokens){
+    var key = keyEl.value.trim();
+    if (!key) return Promise.reject(new Error("manca la chiave API"));
+    return fetch("https://api.anthropic.com/v1/messages", {
+      method:"POST",
+      headers:{
+        "content-type":"application/json",
+        "x-api-key":key,
+        "anthropic-version":"2023-06-01",
+        "anthropic-dangerous-direct-browser-access":"true"
+      },
+      body: JSON.stringify({ model: modelEl.value, max_tokens: maxTokens || 300, system: systemPrompt(), messages: msgs })
+    }).then(function(r){
+      return r.json().catch(function(){ return null; }).then(function(d){
+        if (!r.ok) throw new Error(apiError(r.status, d));
+        return (d.content || []).filter(function(b){ return b.type === "text"; }).map(function(b){ return b.text; }).join(" ").trim();
+      });
+    });
+  }
+  function splitMood(txt){
+    var m = txt.match(/^\s*\[([a-zàèéìòù]+)\]\s*/i), md = null;
+    if (m){ md = m[1].toLowerCase(); txt = txt.slice(m[0].length); }
+    txt = txt.replace(/\[[a-zàèéìòù]+\]/gi, "").replace(/[*_#`]/g, "").trim();
+    return { text: txt, mood: (md && MOODS[md] && !MOODS[md].hidden) ? md : "neutro" };
+  }
+  function describe(b64, instruction, retried){
+    return claudeRaw([{role:"user", content:[
+      {type:"image", source:{type:"base64", media_type:"image/jpeg", data:b64}},
+      {type:"text", text:instruction}
+    ]}], 300).then(function(t){
+      var out = splitMood(t).text;
+      if (!out && !retried) return describe(b64, "Descrivi in una o due frasi brevi cosa vedi in questa immagine.", true);
+      return out || "(descrizione non disponibile)";
+    });
+  }
+  function hhmm(){ var d = new Date(); return d.toLocaleTimeString("it-IT", {hour:"2-digit", minute:"2-digit"}); }
+
+  // ================= Fotogrammi =================
+  function grabFrame(){
+    var v = sentinel.video;
+    if (sentinel.on && v && v.videoWidth){
+      var w = 768, h = Math.round(w * v.videoHeight / v.videoWidth);
+      var c = document.createElement("canvas"); c.width = w; c.height = h;
+      c.getContext("2d").drawImage(v, 0, 0, w, h);
+      return Promise.resolve(c.toDataURL("image/jpeg", 0.8).split(",")[1]);
+    }
+    return takePhoto();
+  }
+
+  // ================= Sentinella =================
+  var sensEl = document.getElementById("sens");
+  sensEl.value = load("robot-sens", "media");
+  sensEl.addEventListener("change", function(){ save("robot-sens", sensEl.value); });
+  var sentBtn = document.getElementById("sentBtn");
+  function syncSentinelUI(){ sentBtn.textContent = sentinel.on ? "Disattiva sentinella" : "Attiva sentinella"; }
+
+  function startSentinel(){
+    if (sentinel.on) return Promise.resolve();
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return Promise.reject(new Error("fotocamera non disponibile"));
+    return navigator.mediaDevices.getUserMedia({video:{facingMode:"user", width:{ideal:1280}, height:{ideal:720}}, audio:false}).then(function(stream){
+      sentinel.stream = stream;
+      var v = document.createElement("video");
+      v.muted = true; v.playsInline = true; v.setAttribute("playsinline", ""); v.srcObject = stream;
+      sentinel.video = v;
+      return v.play();
+    }).then(function(){
+      sentinel.on = true; sentinel.prev = null; sentinel.hits = 0;
+      sentinel.armedAt = performance.now() + 4000;
+      sentinel.timer = setInterval(checkMotion, 700);
+      save("robot-sentinel", "1"); syncSentinelUI(); keepAwake();
+      caption("Sentinella attiva", 4000);
+    });
+  }
+  function stopSentinel(){
+    sentinel.on = false;
+    clearInterval(sentinel.timer);
+    if (sentinel.stream) sentinel.stream.getTracks().forEach(function(t){ t.stop(); });
+    sentinel.stream = null; sentinel.video = null;
+    save("robot-sentinel", "0"); syncSentinelUI();
+    caption("Sentinella disattivata", 3000);
+  }
+  function checkMotion(){
+    var v = sentinel.video;
+    if (!v || !v.videoWidth) return;
+    var c = sentinel.small || (sentinel.small = document.createElement("canvas"));
+    c.width = 64; c.height = 48;
+    var x = c.getContext("2d");
+    x.drawImage(v, 0, 0, 64, 48);
+    var d = x.getImageData(0, 0, 64, 48).data;
+    var n = 64 * 48, g = new Uint8Array(n);
+    for (var i = 0; i < n; i++) g[i] = (d[i*4] * 0.3 + d[i*4+1] * 0.59 + d[i*4+2] * 0.11) | 0;
+    var prev = sentinel.prev; sentinel.prev = g;
+    if (!prev || performance.now() < sentinel.armedAt) return;
+    var changed = 0, sx = 0;
+    for (var j = 0; j < n; j++) if (Math.abs(g[j] - prev[j]) > 28){ changed++; sx += j % 64; }
+    var thr = {alta:0.015, media:0.04, bassa:0.09}[sensEl.value] || 0.04;
+    if (changed / n > thr){ sentinel.hits++; sentinel.cx = (sx / changed) / 64; } else sentinel.hits = 0;
+    if (sentinel.hits >= 2){ sentinel.hits = 0; onMotion(sentinel.cx); }
+  }
+  function onMotion(cx){
+    var now = Date.now();
+    window.robot.lookAt(Math.max(-1, Math.min(1, (0.5 - cx) * 2)), 0, 3000);
+    window.robot.react("sorpreso", 1500);
+    if (now - sentinel.lastAlert < 60000) return;
+    sentinel.alerts = sentinel.alerts.filter(function(t){ return now - t < 3600000; });
+    if (sentinel.alerts.length >= 20) return;
+    sentinel.lastAlert = now; sentinel.alerts.push(now); sentinel.lastEvent = now;
+    var when = hhmm();
+    grabFrame().then(function(b64){
+      return describe(b64, "Il tuo proprietario ti ha chiesto di tenere d’occhio la stanza mentre è via, e qualcosa si è appena mosso davanti a te. Descrivi in una o due frasi brevi cosa vedi: persone, animali o oggetti. Se non vedi niente di particolare, dillo.")
+        .catch(function(){ return "(descrizione non disponibile)"; })
+        .then(function(desc){
+          if (!tg.owner) return;
+          return tgSendPhoto(b64, "Movimento alle " + when + ". " + desc);
+        });
+    }).catch(function(e){ caption("Sentinella: " + (e && e.message ? e.message : e), 6000); });
+  }
+  sentBtn.addEventListener("click", function(){
+    closePanel();
+    if (sentinel.on) stopSentinel();
+    else startSentinel().catch(function(e){ caption("Non riesco ad attivare la sentinella: " + (e && e.message ? e.message : e), 6000); });
+  });
+
+  // ================= Telegram =================
+  var tg = {
+    token: load("robot-tg-token", ""),
+    owner: load("robot-tg-owner", ""),
+    offset: parseInt(load("robot-tg-offset", "0"), 10) || 0,
+    gen: 0, running: false, username: "", waitSay: false
+  };
+  var tgTokenEl = document.getElementById("tgToken");
+  var tgStatusEl = document.getElementById("tgStatus");
+  tgTokenEl.value = tg.token;
+  var HELP = "Usa i pulsanti qui sotto:\n🛡️ Sentinella - la attivo o la spengo\n📷 Foto - scatto una foto e ti dico cosa vedo\n📊 Stato - come sto e cosa c’è intorno\n🔊 Fai parlare - mi scrivi una frase e la dico ad alta voce in casa\nOppure scrivimi e ti rispondo come in chat.";
+  // tastiera a pulsanti fissa nella chat (il pulsante della sentinella cambia con lo stato)
+  function tgKeyboard(){
+    return JSON.stringify({ keyboard: [
+      [{text: sentinel.on ? "🛡️ Spegni sentinella" : "🛡️ Attiva sentinella"}, {text: "📷 Foto"}],
+      [{text: "📊 Stato"}, {text: "🔊 Fai parlare"}, {text: "❓ Aiuto"}]
+    ], resize_keyboard: true, is_persistent: true });
+  }
+  function mapButton(t){
+    var x = t.toLowerCase();
+    if (x.indexOf("spegni sentinella") >= 0) return "/sentinella off";
+    if (x.indexOf("attiva sentinella") >= 0) return "/sentinella on";
+    if (/^\W*foto$/.test(x)) return "/foto";
+    if (/^\W*stato$/.test(x)) return "/stato";
+    if (x.indexOf("fai parlare") >= 0) return "/di";
+    if (/^\W*aiuto$/.test(x)) return "/aiuto";
+    return null;
+  }
+  function tgSetCommands(){
+    var cmds = [
+      {command: "sentinella", description: "Attiva o spegni la sentinella"},
+      {command: "foto", description: "Scatta una foto e dimmi cosa vedi"},
+      {command: "stato", description: "Come stai e cosa c’è intorno"},
+      {command: "di", description: "Dì una frase ad alta voce in casa"},
+      {command: "aiuto", description: "Mostra i pulsanti e i comandi"}
+    ];
+    fetch(tgUrl("setMyCommands"), {method:"POST", body: new URLSearchParams({commands: JSON.stringify(cmds)})}).catch(function(){});
+  }
+
+  function syncTgUI(){
+    if (!tg.token) tgStatusEl.textContent = "Telegram non collegato.";
+    else if (!tg.owner) tgStatusEl.textContent = "In attesa: invia /start al tuo bot" + (tg.username ? " @" + tg.username : "") + " dal tuo telefono.";
+    else tgStatusEl.textContent = "Telegram collegato: rispondo solo al tuo account.";
+  }
+  function tgUrl(m){ return "https://api.telegram.org/bot" + tg.token + "/" + m; }
+  function tgSend(text){
+    if (!tg.owner) return Promise.resolve();
+    var body = new URLSearchParams({chat_id: tg.owner, text: String(text).slice(0, 4000), reply_markup: tgKeyboard()});
+    return fetch(tgUrl("sendMessage"), {method:"POST", body: body}).catch(function(){});
+  }
+  function tgSendPhoto(b64, cap){
+    return fetch("data:image/jpeg;base64," + b64).then(function(r){ return r.blob(); }).then(function(blob){
+      var fd = new FormData();
+      fd.append("chat_id", tg.owner);
+      fd.append("caption", String(cap).slice(0, 1000));
+      fd.append("reply_markup", tgKeyboard());
+      fd.append("photo", blob, "foto.jpg");
+      return fetch(tgUrl("sendPhoto"), {method:"POST", body: fd});
+    });
+  }
+  function statusText(){
+    var lines = [];
+    lines.push("Sentinella: " + (sentinel.on ? "attiva" : "spenta"));
+    if (sentinel.lastEvent) lines.push("Ultimo movimento: " + new Date(sentinel.lastEvent).toLocaleTimeString("it-IT", {hour:"2-digit", minute:"2-digit"}));
+    lines.push("Umore: " + (MOODS[mood] ? MOODS[mood].label : mood));
+    var p = (navigator.getBattery ? navigator.getBattery().then(function(b){
+      lines.push("Batteria: " + Math.round(b.level * 100) + "%" + (b.charging ? ", in carica" : ", NON in carica"));
+    }).catch(function(){}) : Promise.resolve());
+    return p.then(function(){ return lines.join("\n"); });
+  }
+  function chatRemote(text){
+    history.push({role:"user", content: text + " (scritto da Telegram, sono fuori casa)"});
+    while (history.length > 14) history.shift();
+    while (history.length && history[0].role !== "user") history.shift();
+    claudeRaw(history.slice(), 300).then(function(t){
+      history.push({role:"assistant", content:t});
+      saveHistory();
+      t = applyMemoryTags(t);
+      var r = splitMood(t);
+      window.robot.react(r.mood, 2500);
+      tgSend(r.text);
+    }).catch(function(e){
+      if (history.length && history[history.length-1].role === "user") history.pop();
+      tgSend("Non riesco a pensare in questo momento: " + (e && e.message ? e.message : e));
+    });
+  }
+  function handleTg(msg){
+    var chatId = String(msg.chat && msg.chat.id);
+    var text = (msg.text || "").trim();
+    if (!tg.owner){
+      if (/^\/start/.test(text)){
+        tg.owner = chatId; save("robot-tg-owner", chatId); syncTgUI();
+        tgSend("Collegato! Da ora rispondo solo a te.\n\n" + HELP);
+        caption("Telegram collegato", 5000); window.robot.react("felice", 2500);
+      }
+      return;
+    }
+    if (chatId !== tg.owner) return;
+    var mapped = mapButton(text);
+    if (mapped) text = mapped;
+    if (tg.waitSay){
+      tg.waitSay = false;
+      if (text && text.charAt(0) !== "/"){ speak(text, "felice"); tgSend("Detto ad alta voce."); return; }
+    }
+    var first = text.split(/\s+/)[0] || "";
+    var cmd = first.toLowerCase().replace(/@.*$/, "");
+    var arg = text.slice(first.length).trim().toLowerCase();
+    var argRaw = text.slice(first.length).trim();
+    if (cmd === "/start" || cmd === "/aiuto" || cmd === "/help"){ tgSend(HELP); return; }
+    if (cmd === "/sentinella"){
+      var want = (arg === "on" || arg === "attiva") ? true : (arg === "off" || arg === "spegni") ? false : !sentinel.on;
+      var pr = want ? startSentinel() : Promise.resolve(sentinel.on ? stopSentinel() : null);
+      pr.then(function(){ tgSend(sentinel.on ? "Sentinella attivata: ti avviso se vedo movimento." : "Sentinella disattivata."); })
+        .catch(function(e){ tgSend("Non riesco ad attivare la sentinella: " + (e && e.message ? e.message : e)); });
+      return;
+    }
+    if (cmd === "/foto"){
+      tgSend("Scatto…");
+      grabFrame().then(function(b64){
+        return describe(b64, "Descrivi in una o due frasi brevi cosa vedi in questo momento.")
+          .catch(function(){ return ""; })
+          .then(function(dsc){ return tgSendPhoto(b64, hhmm() + (dsc ? ". " + dsc : "")); });
+      }).catch(function(e){ tgSend("Non riesco a scattare: " + (e && e.message ? e.message : e)); });
+      return;
+    }
+    if (cmd === "/stato"){ statusText().then(tgSend); return; }
+    if (cmd === "/di"){
+      if (!argRaw){ tg.waitSay = true; tgSend("Scrivimi la frase da dire ad alta voce in casa."); return; }
+      speak(argRaw, "felice"); tgSend("Detto ad alta voce."); return;
+    }
+    if (cmd === "/guarda"){ tgSend("Per girare la testa servono i servo: arriveranno presto!"); return; }
+    if (text && text.charAt(0) !== "/"){ chatRemote(text); return; }
+    tgSend("Comando non riconosciuto.\n\n" + HELP);
+  }
+  function tgPoll(gen){
+    if (gen !== tg.gen || !tg.token) return;
+    fetch(tgUrl("getUpdates") + "?timeout=25&offset=" + tg.offset).then(function(r){ return r.json(); }).then(function(d){
+      if (gen !== tg.gen) return;
+      if (!d.ok){
+        caption("Telegram: " + (d.description || "errore"), 6000);
+        if (d.error_code === 401){ tg.running = false; tgStatusEl.textContent = "Token non valido: controllalo."; return; }
+        setTimeout(function(){ tgPoll(gen); }, 10000); return;
+      }
+      (d.result || []).forEach(function(u){
+        tg.offset = u.update_id + 1; save("robot-tg-offset", String(tg.offset));
+        if (u.message){ try { handleTg(u.message); } catch(e){} }
+      });
+      tgPoll(gen);
+    }).catch(function(){ if (gen === tg.gen) setTimeout(function(){ tgPoll(gen); }, 5000); });
+  }
+  function tgStart(){ tg.gen++; tg.running = true; syncTgUI(); tgSetCommands(); tgPoll(tg.gen); }
+  document.getElementById("tgConnect").addEventListener("click", function(){
+    var t = tgTokenEl.value.trim();
+    if (!t){ tgStatusEl.textContent = "Incolla prima il token del bot."; return; }
+    tgStatusEl.textContent = "Controllo il token…";
+    fetch("https://api.telegram.org/bot" + t + "/getMe").then(function(r){ return r.json(); }).then(function(d){
+      if (!d.ok){ tgStatusEl.textContent = "Token non valido: controllalo."; return; }
+      tg.token = t; tg.username = d.result.username || ""; save("robot-tg-token", t);
+      tgStart();
+    }).catch(function(){ tgStatusEl.textContent = "Non riesco a raggiungere Telegram: controlla il Wi-Fi."; });
+  });
+  document.getElementById("tgDisconnect").addEventListener("click", function(){
+    tg.gen++; tg.running = false; tg.token = ""; tg.owner = "";
+    save("robot-tg-token", ""); save("robot-tg-owner", "");
+    tgTokenEl.value = ""; syncTgUI();
+  });
+  syncTgUI();
+  if (tg.token) tgStart();
+  if (load("robot-sentinel", "0") === "1") setTimeout(function(){ startSentinel().catch(function(){}); }, 1500);
+
+  // ================= Parola chiave "Rojo" (Vosk, tutto sul telefono) =================
+  var VOSK_JS = "https://cdn.jsdelivr.net/npm/vosk-browser@0.0.8/dist/vosk.js";
+  // Il Chrome dell'Xperia accetta solo la forma vecchia postMessage(messaggio, [buffer]):
+  // la libreria usa quella nuova postMessage(messaggio, {transfer:[buffer]}) e l'audio non partiva mai.
+  (function(){
+    if (!window.Worker || Worker.prototype.__pmFix) return;
+    var pm = Worker.prototype.postMessage;
+    Worker.prototype.postMessage = function(msg, opt){
+      if (opt && !Array.isArray(opt) && typeof opt === "object" && (typeof Symbol === "undefined" || typeof opt[Symbol.iterator] !== "function"))
+        return pm.call(this, msg, opt.transfer || []);
+      return pm.apply(this, arguments);
+    };
+    Worker.prototype.__pmFix = true;
+  })();
+  var VOSK_MODELS = {
+    es: "https://ccoreilly.github.io/vosk-browser/models/vosk-model-small-es-0.3.tar.gz",
+    it: "https://ccoreilly.github.io/vosk-browser/models/vosk-model-small-it-0.4.tar.gz"
+  };
+  var wakeModeEl = document.getElementById("wakeMode"), wakeWordEl = document.getElementById("wakeWord");
+  var wakeUrlEl = document.getElementById("wakeUrl"), wakeStatusEl = document.getElementById("wakeStatus");
+  wakeModeEl.value = load("robot-wake", "0");
+  // la parola chiave segue il nome del robot, a meno che non se ne scriva un'altra
+  var oldWord = load("robot-wake-word", "");
+  wakeWordEl.value = (oldWord === "rojo") ? "" : oldWord;     // la 6.5 salvava "rojo" come predefinito
+  wakeUrlEl.value = load("robot-wake-url", "");
+  if (/ccoreilly\.github\.io/.test(wakeUrlEl.value)){ wakeUrlEl.value = ""; save("robot-wake-url", ""); }
+  var wake = {model:null, modelUrl:"", loading:null, rec:null, ctx:null, stream:null, src:null, node:null, running:false, starting:false, lastFire:0, holdUntil:0, heard:"", heardAt:0};
+  var wakeHeardEl = document.getElementById("wakeHeard"), wakeDiagEl = document.getElementById("wakeDiag");
+  var diag = {chunks:0, level:0, partial:"", partialAt:0, err:"", ctxState:"-", gain:1};
+  var wakeSensEl = document.getElementById("wakeSens");
+  wakeSensEl.value = load("robot-wake-sens", "3");
+  var wakeConfEl = document.getElementById("wakeConf");
+  wakeConfEl.value = load("robot-wake-conf", "0.6");
+  wakeConfEl.addEventListener("change", function(){ save("robot-wake-conf", wakeConfEl.value); });
+  // cambiare modalità richiede un riconoscitore nuovo (con o senza vocabolario ridotto)
+  function wakeResetRec(){ wakePause(); if (wake.rec){ try { wake.rec.remove(); } catch(e){} } wake.rec = null; wake.recGrammar = null; }
+  wakeSensEl.addEventListener("change", function(){ save("robot-wake-sens", wakeSensEl.value); wakeResetRec(); });
+  // amplificatore automatico: porta la voce lontana a un livello costante senza gonfiare il silenzio
+  var agc = {g:1, nf:0.003};
+  function agcProcess(inBuf){
+    var d = inBuf.getChannelData(0), n = d.length, sum = 0, i;
+    for (i = 0; i < n; i++) sum += d[i] * d[i];
+    var rms = Math.sqrt(sum / n) || 1e-6;
+    agc.nf = rms < agc.nf ? rms : Math.min(0.05, agc.nf * 1.003);          // rumore di fondo, risale piano
+    var maxG = wakeSensEl.value === "1" ? 5 : 12;
+    var lim = Math.max(1, 0.012 / Math.max(agc.nf, 1e-5));                    // il silenzio non supera ~1%
+    var tgt = Math.max(1, Math.min(maxG, lim, 0.06 / rms));
+    agc.g = agc.g * 0.7 + tgt * 0.3;
+    var out = new Float32Array(n), g = agc.g;
+    for (i = 0; i < n; i++){ var v = d[i] * g; out[i] = v > 1 ? 1 : (v < -1 ? -1 : v); }
+    diag.gain = g; diag.level = rms;
+    return {getChannelData: function(){ return out; }, sampleRate: inBuf.sampleRate, length: n, numberOfChannels: 1};
+  }
+  setInterval(function(){
+    if (wakeModeEl.value !== "1"){ wakeDiagEl.textContent = "Diagnosi: ascolto spento."; return; }
+    var lv = Math.min(100, Math.round(diag.level * 400));
+    wakeDiagEl.textContent = "Diagnosi: " + (wake.running ? "microfono aperto" : "microfono chiuso") +
+      " · audio " + (wake.ctx ? wake.ctx.state : "-") +
+      " · pezzi inviati " + diag.chunks +
+      " · volume " + lv + "% · amplificazione ×" + diag.gain.toFixed(1) +
+      (diag.partial && Date.now() - diag.partialAt < 8000 ? " · sto sentendo: “" + diag.partial + "”" : "") +
+      (diag.err ? " · errore: " + diag.err : "");
+  }, 1000);
+  function wakeStatus(t){ wakeStatusEl.textContent = t; }
+  function wakeWord(){ return (wakeWordEl.value.trim() || nameEl.value.trim() || "Rojo").toLowerCase().replace(/[^a-zà-ÿ ]/g, "").trim(); }
+  function wakeLang(){ return /^(rojo|roja)$/.test(wakeWord()) ? "es" : "it"; }
+  function wakeModelUrl(){ return wakeUrlEl.value.trim() || VOSK_MODELS[wakeLang()]; }
+  function wakeAlts(){
+    var w = wakeWord();
+    if (w === "rojo" || w === "roja") return ["rojo", "roja", "rojos", "royo", "rollo"];
+    if (w === "rosso") return ["rosso", "rossa", "rossi"];
+    return [w];
+  }
+  // frase finita: il nome da solo, con o senza "ehi" davanti; parziale: solo "ehi + nome", per rispondere subito
+  function wakeMatch(t, final){
+    var alts = "(" + wakeAlts().join("|") + ")", hey = "(ehi|ei|hey|ehy|oye|eh|e)";
+    t = " " + t.toLowerCase().replace(/\s+/g, " ").trim() + " ";
+    if (final && new RegExp("^ (" + hey + " )?" + alts + " $").test(t)) return true;
+    if (!final && new RegExp("^ " + hey + " " + alts + " ").test(t)) return true;
+    if (final && wakeSensEl.value !== "1"){
+      // da lontano il riconoscitore aggiunge spesso una parola sbagliata: frase corta (max 3 parole) con il nome tra le prime due
+      var w = t.trim().split(" ");
+      var filler = w[0].length <= 3 && !/^(il|lo|la|i|gli|le|un|uno|una|del|dei|di|da|in|su|per|con|tra|fra|al|nel|col|più|non|che|è|ho|ha)$/.test(w[0]);
+      if (w.length <= 3 && (new RegExp("^" + alts + "$").test(w[0]) || (w.length > 1 && filler && new RegExp("^" + alts + "$").test(w[1])))) return true;
+    }
+    return false;
+  }
+  function loadScript(src){
+    return new Promise(function(res, rej){
+      if (window.Vosk) return res();
+      var s = document.createElement("script"); s.src = src; s.onload = res;
+      s.onerror = function(){ rej(new Error("non riesco a scaricare la libreria vocale")); };
+      document.head.appendChild(s);
+    });
+  }
+  function wakeLoad(){
+    var url = wakeModelUrl();
+    if (wake.model && wake.modelUrl === url) return Promise.resolve(wake.model);
+    if (wake.model){ try { wake.model.terminate(); } catch(e){} wake.model = null; wake.rec = null; }
+    if (wake.loading) return wake.loading;
+    wakeStatus("Preparo il modello vocale " + (wakeLang() === "es" ? "spagnolo" : "italiano") + " (la prima volta lo scarico, circa 35 MB)…");
+    wake.loading = loadScript(VOSK_JS).then(function(){
+      return window.Vosk.createModel(url, -2);
+    }).then(function(m){ wake.model = m; wake.modelUrl = url; wake.loading = null; return m; }, function(e){ wake.loading = null; throw e; });
+    return wake.loading;
+  }
+  // in "Solo il nome" il riconoscitore conosce solo il nome, "ehi" e [unk] (tutto il resto):
+  // si guarda la sicurezza (conf) che dà sulla parola del nome
+  function wakeGrammar(){
+    var alts = wakeAlts(), g = ["[unk]", "ehi"];
+    alts.forEach(function(a){ g.push(a); g.push("ehi " + a); });
+    return JSON.stringify(g);
+  }
+  function wakeCheckGrammar(res){
+    var words = (res && res.result) || [], t = (res && res.text) || "";
+    var alts = wakeAlts(), best = 0, bestW = "";
+    words.forEach(function(w){ if (alts.indexOf(w.word) >= 0 && w.conf > best){ best = w.conf; bestW = w.word; } });
+    var shown = t.replace(/\[unk\]/g, "…").trim() || "…";
+    wake.heard = t; wake.heardAt = Date.now();
+    wakeHeardEl.textContent = "Ultime parole sentite (" + hhmm() + "): " + shown + (bestW ? " · sicurezza " + Math.round(best * 100) + "%" : "");
+    if (!bestW || best < parseFloat(wakeConfEl.value)) return;
+    var others = t.split(" ").filter(function(x){ return x && x !== "[unk]" && x !== "ehi" && alts.indexOf(x) < 0; });
+    if (words.length > 4) return;                    // frase lunga: il nome era in mezzo a un discorso
+    var now = performance.now();
+    if (now - wake.lastFire < 3000) return;
+    wake.lastFire = now;
+    wakeFire();
+  }
+  function wakeCheck(t, final){
+    if (!t) return;
+    if (final){ wake.heard = t; wake.heardAt = Date.now(); wakeHeardEl.textContent = "Ultime parole sentite (" + hhmm() + "): " + t; }
+    if (!wakeMatch(t, final)) return;
+    var now = performance.now();
+    if (now - wake.lastFire < 3000) return;
+    wake.lastFire = now;
+    wakeFire();
+  }
+  function wakeResume(){
+    if (wake.running || wake.starting || wakeModeEl.value !== "1") return;
+    wake.starting = true;
+    wakeLoad().then(function(model){
+      if (!(state === "idle" && wakeModeEl.value === "1")) throw "skip";
+      return navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false, noiseSuppression:false, autoGainControl:true, channelCount:1}, video:false}).then(function(stream){
+        if (!(state === "idle" && wakeModeEl.value === "1")){ stream.getTracks().forEach(function(t){ t.stop(); }); throw "skip"; }
+        if (!wake.ctx) wake.ctx = new (window.AudioContext || window.webkitAudioContext)();
+        if (wake.ctx.state === "suspended") wake.ctx.resume().catch(function(){});
+        var gram = wakeSensEl.value === "3" ? wakeGrammar() : null;
+        if (wake.rec && wake.recGrammar !== gram){ try { wake.rec.remove(); } catch(e){} wake.rec = null; }
+        if (!wake.rec){
+          wake.rec = gram ? new model.KaldiRecognizer(wake.ctx.sampleRate, gram) : new model.KaldiRecognizer(wake.ctx.sampleRate);
+          wake.recGrammar = gram;
+          if (gram){ try { wake.rec.setWords(true); } catch(e){} }
+          wake.rec.on("partialresult", function(m){ var p = m.result && m.result.partial; if (p){ diag.partial = p.replace(/\[unk\]/g, "…"); diag.partialAt = Date.now(); } if (!wake.recGrammar) wakeCheck(p, false); });
+          wake.rec.on("result", function(m){ if (wake.recGrammar) wakeCheckGrammar(m.result); else wakeCheck(m.result && m.result.text, true); });
+          try { wake.rec.on("error", function(m){ diag.err = (m && m.error) || "riconoscitore"; }); } catch(e){}
+          try { model.on("error", function(m){ diag.err = (m && m.error) || "modello"; }); } catch(e){}
+        }
+        wake.stream = stream;
+        wake.src = wake.ctx.createMediaStreamSource(stream);
+        wake.node = wake.ctx.createScriptProcessor(4096, 1, 1);
+        wake.node.onaudioprocess = function(ev){
+          if (!wake.running) return;
+          try { wake.rec.acceptWaveform(agcProcess(ev.inputBuffer)); diag.chunks++; } catch(e){ diag.err = e && e.message ? e.message : String(e); }
+        };
+        wake.src.connect(wake.node); wake.node.connect(wake.ctx.destination);
+        wake.running = true;
+        wakeReady();
+      });
+    }).catch(function(e){
+      if (e !== "skip"){ wakeStatus("Parola chiave non disponibile: " + (e && e.message ? e.message : e)); }
+    }).then(function(){ wake.starting = false; });
+  }
+  function wakePause(){
+    if (!wake.running) return;
+    wake.running = false;
+    try { wake.src.disconnect(); wake.node.disconnect(); } catch(e){}
+    if (wake.stream) wake.stream.getTracks().forEach(function(t){ t.stop(); });
+    wake.stream = wake.src = wake.node = null;
+  }
+  function wakeFire(){
+    if (state !== "idle" || sentinel.on) return;
+    wakePause();
+    window.robot.react("sorpreso", 700);
+    caption("Sì?", 0);
+    setTimeout(function(){ if (state === "idle") startListening(); }, 300);   // il tempo di liberare il microfono
+  }
+  // controlla ogni mezzo secondo se l'ascolto della parola chiave deve girare
+  setInterval(function(){
+    var want = wakeModeEl.value === "1" && state === "idle" && !sentinel.on && performance.now() > wake.holdUntil && document.visibilityState === "visible";
+    if (want) wakeResume(); else wakePause();
+  }, 500);
+  // Chrome tiene l'audio bloccato finché non si tocca la pagina almeno una volta dopo averla aperta
+  function wakeReady(){
+    var w = wakeWord(); w = w.charAt(0).toUpperCase() + w.slice(1);
+    if (wake.ctx && wake.ctx.state === "suspended"){
+      wakeStatus("Pronto, ma Chrome blocca l’audio finché non tocchi lo schermo una volta.");
+      caption("Tocca lo schermo una volta: poi potrai chiamarmi “" + w + "”.", 8000);
+    } else wakeStatus("In ascolto: chiamalo “" + w + "”.");
+  }
+  document.addEventListener("pointerdown", function(){ if (wake.ctx && wake.ctx.state === "suspended") wake.ctx.resume().then(function(){ if (wake.running) wakeReady(); }).catch(function(){}); });
+  wakeModeEl.addEventListener("change", function(){
+    save("robot-wake", wakeModeEl.value);
+    if (wakeModeEl.value === "1"){ wakeStatus("Avvio…"); if (!wake.ctx){ try { wake.ctx = new (window.AudioContext || window.webkitAudioContext)(); } catch(e){} } }
+    else { wakePause(); wakeStatus("Spento."); }
+  });
+  wakeWordEl.addEventListener("change", function(){ save("robot-wake-word", wakeWordEl.value.trim()); wakeResetRec(); });
+  nameEl.addEventListener("change", function(){ wakeResetRec(); });
+  wakeUrlEl.addEventListener("change", function(){ save("robot-wake-url", wakeUrlEl.value.trim()); wakePause(); });
+  if (wakeModeEl.value === "1") wakeStatus("Avvio…");
+
+  // ================= Schermo intero e schermo acceso =================
+  var wakeLock = null;
+  function keepAwake(){
+    if (!("wakeLock" in navigator) || document.visibilityState !== "visible") return;
+    if (wakeLock && !wakeLock.released) return;
+    navigator.wakeLock.request("screen").then(function(l){
+      wakeLock = l;
+      l.addEventListener("release", function(){ wakeLock = null; setTimeout(keepAwake, 1000); });
+    }).catch(function(){});
+  }
+  document.addEventListener("visibilitychange", keepAwake);
+  document.addEventListener("pointerdown", keepAwake);
+  setInterval(keepAwake, 60000);
+  keepAwake();
+  document.getElementById("fsBtn").addEventListener("click", function(){
+    var el = document.documentElement;
+    var req = el.requestFullscreen || el.webkitRequestFullscreen;
+    keepAwake(); closePanel();
+    if (!req){ caption("Schermo intero non disponibile: apri la pagina da una scheda normale di Chrome.", 6000); return; }
+    var p;
+    try { p = req.call(el, {navigationUI:"hide"}); }
+    catch(err){ caption("Schermo intero bloccato: " + err.message, 6000); return; }
+    if (p && p.then){
+      p.then(function(){
+        if (screen.orientation && screen.orientation.lock) screen.orientation.lock("landscape").catch(function(){});
+      }).catch(function(err){ caption("Schermo intero bloccato: " + (err && err.message ? err.message : "motivo sconosciuto"), 6000); });
+    }
+  });
+})();
+</script>
+</body>
+</html>
